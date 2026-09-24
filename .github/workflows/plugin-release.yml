@@ -20,7 +20,16 @@ jobs:
           php -l plugin/src/network.php
           php -l plugin/webui/powerpilot.page
       - name: Test decision engine
-        run: php plugin/tests/engine_test.php
+        run: |
+          set +e
+          php plugin/tests/engine_test.php > "$RUNNER_TEMP/engine-test.log" 2>&1
+          result=$?
+          cat "$RUNNER_TEMP/engine-test.log"
+          if [ "$result" -ne 0 ]; then
+            echo "### Decision engine test failure" >> "$GITHUB_STEP_SUMMARY"
+            cat "$RUNNER_TEMP/engine-test.log" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$result"
       - name: Test network tuning
         run: php plugin/tests/network_test.php
       - name: Build Unraid package
