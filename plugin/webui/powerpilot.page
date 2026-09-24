@@ -1,3 +1,8 @@
+Menu="Settings"
+Title="PowerPilot"
+Icon="microchip"
+Type="php"
+---
 <?php
 $enginePath = is_file(__DIR__ . '/src/engine.php') ? __DIR__ . '/src/engine.php' : __DIR__ . '/../src/engine.php';
 require_once $enginePath;
@@ -11,6 +16,10 @@ use function PowerPilot\currentProfile;
 use function PowerPilot\scheduledProfile;
 use function PowerPilot\applyProfile;
 use function PowerPilot\validConfig;
+use function PowerPilot\networkPlan;
+use function PowerPilot\networkConfigHash;
+use function PowerPilot\applyNetworkPlan;
+use function PowerPilot\restoreNetworkSettings;
 
 $var = $var ?? [];
 $isAjax = isset($_GET['ajax']) || isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false;
@@ -30,6 +39,8 @@ if ($isAjax) {
                 $next = $input['config'] ?? null;
                 if (!is_array($next)) $reply(['error'=>'Missing config'],400);
                 $next['dry_run'] = (bool)($cfg['dry_run'] ?? true);
+                $next = PowerPilot\configWithDefaults($next);
+                $next['network']['live_enabled'] = !empty($cfg['network']['live_enabled']);
                 if (!validConfig($next,$error)) $reply(['error'=>$error],400);
                 saveConfig($next); $reply(['ok'=>true]);
             }
@@ -40,6 +51,50 @@ if ($isAjax) {
                 $cfg['dry_run'] = !$enableLive; saveConfig($cfg);
                 if ($enableLive && $wasDry) { $state['active_profile']=null; $state['last_switch']=0; $state['last_applied']=false; atomicJson(PowerPilot\STATE_FILE,$state); }
                 $reply(['ok'=>true,'dry_run'=>$cfg['dry_run']]);
+            }
+            if ($action === 'network_mode') {
+                if (!in_array($input['mode'] ?? '', ['dry_run', 'live'], true) || empty($input['confirmed'])) {
+                    $reply(['error' => 'Explicit network mode confirmation required'], 400);
+                }
+
+                if ($input['mode'] === 'live') {
+                    $preview = networkPlan($cfg);
+                    if ($preview['autotweak_detected']) {
+                        $reply(['error' => 'AutoTweak is installed. Disable or uninstall it before enabling PowerPilot network tuning.'], 409);
+                    }
+                    if (empty($cfg['network']['tcp_enabled']) && empty($cfg['network']['irq_enabled'])) {
+                        $reply(['error' => 'Enable TCP tuning or NIC IRQ affinity and save first.'], 400);
+                    }
+                    if (!empty($cfg['network']['irq_enabled']) && empty($cfg['network']['interfaces'])) {
+                        $reply(['error' => 'Select at least one physical NIC for IRQ affinity.'], 400);
+                    }
+
+                    $cfg['network']['live_enabled'] = true;
+                    saveConfig($cfg);
+                    $result = applyNetworkPlan($cfg, $state);
+                    $state['network_status'] = [
+                        'live_enabled' => true,
+                        'applied' => $result['applied'],
+                        'errors' => $result['errors'],
+                        'updated_at' => date(DATE_ATOM),
+                    ];
+                    $state['network_status']['boot_id'] = networkReadValue('/proc/sys/kernel/random/boot_id') ?? 'unknown';
+                    $state['network_status']['config_hash'] = networkConfigHash($cfg['network']);
+                    atomicJson(PowerPilot\STATE_FILE, $state);
+                    $reply(['ok' => true, 'applied' => $result['applied'], 'errors' => $result['errors']]);
+                }
+
+                $cfg['network']['live_enabled'] = false;
+                saveConfig($cfg);
+                $restore = restoreNetworkSettings($state);
+                $state['network_status'] = [
+                    'live_enabled' => false,
+                    'applied' => empty($restore['errors']),
+                    'errors' => $restore['errors'],
+                    'updated_at' => date(DATE_ATOM),
+                ];
+                atomicJson(PowerPilot\STATE_FILE, $state);
+                $reply(['ok' => true, 'restored' => $restore['restored'], 'errors' => $restore['errors']]);
             }
             if ($action === 'manual') {
                 $profile=$input['profile']??null;
@@ -55,12 +110,12 @@ if ($isAjax) {
             $reply(['error'=>'Unknown action'],400);
         }
         [$base,$baseReason]=scheduledProfile($cfg,new DateTimeImmutable('now'));
-        $state=loadState(); $reply(['version'=>PowerPilot\VERSION,'config'=>$cfg,'state'=>$state,'current'=>currentProfile(),'base_profile'=>$base,'base_reason'=>$baseReason,'history'=>history(100),'csrf_token'=>(string)($var['csrf_token']??'')]);
+        $state=loadState(); $reply(['version'=>PowerPilot\VERSION,'config'=>$cfg,'state'=>$state,'current'=>currentProfile(),'base_profile'=>$base,'base_reason'=>$baseReason,'history'=>history(100),'network_plan'=>networkPlan($cfg),'csrf_token'=>(string)($var['csrf_token']??'')]);
     } catch (Throwable $e) { $reply(['error'=>$e->getMessage()],500); }
 }
 ?>
 <style>
-.pp-wrap{max-width:1420px;margin:18px auto;padding:0 18px;color:#e8edf5}.pp-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.pp-card{background:#20242b;border:1px solid #373d47;border-radius:9px;padding:16px;margin:12px 0}.pp-card h3{margin:0 0 12px}.pp-kpi{font-size:24px;font-weight:700;margin-top:5px}.pp-muted{color:#aeb7c4}.pp-row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.pp-field{display:flex;flex-direction:column;gap:4px;margin:5px 0;min-width:115px;flex:1}.pp-field input,.pp-field select{background:#11151b;color:#f4f6fa;border:1px solid #454c58;border-radius:4px;padding:7px}.pp-btn{border:1px solid #596477;border-radius:5px;background:#303946;color:#fff;padding:7px 11px;cursor:pointer}.pp-btn:hover{background:#3a485b}.pp-danger{background:#612e34}.pp-table{width:100%;border-collapse:collapse}.pp-table th,.pp-table td{text-align:left;padding:8px;border-bottom:1px solid #393f49;vertical-align:top}.pp-condition{border:1px solid #3a424e;border-radius:6px;padding:10px;margin:8px 0}.pp-banner{padding:10px;border-radius:5px;background:#303946;margin:8px 0}.pp-ok{color:#6ee7a1}.pp-warn{color:#ffd166}.pp-err{color:#ff8585}.pp-days label{margin-right:7px;white-space:nowrap}.pp-small{font-size:12px}@media(max-width:900px){.pp-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:600px){.pp-grid{grid-template-columns:1fr}.pp-table{font-size:12px}}
+.pp-wrap{max-width:1420px;margin:18px auto;padding:0 18px;color:#e8edf5}.pp-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.pp-card{background:#20242b;border:1px solid #373d47;border-radius:9px;padding:16px;margin:12px 0}.pp-card h3{margin:0 0 12px}.pp-kpi{font-size:24px;font-weight:700;margin-top:5px}.pp-muted{color:#aeb7c4}.pp-row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.pp-field{display:flex;flex-direction:column;gap:4px;margin:5px 0;min-width:115px;flex:1}.pp-field input,.pp-field select{background:#11151b;color:#f4f6fa;border:1px solid #454c58;border-radius:4px;padding:7px}.pp-btn{border:1px solid #596477;border-radius:5px;background:#303946;color:#fff;padding:7px 11px;cursor:pointer}.pp-btn:hover{background:#3a485b}.pp-danger{background:#612e34}.pp-table{width:100%;border-collapse:collapse}.pp-table th,.pp-table td{text-align:left;padding:8px;border-bottom:1px solid #393f49;vertical-align:top}.pp-nic-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px}.pp-nic{border:1px solid #3a424e;border-radius:6px;padding:9px}.pp-condition{border:1px solid #3a424e;border-radius:6px;padding:10px;margin:8px 0}.pp-banner{padding:10px;border-radius:5px;background:#303946;margin:8px 0}.pp-ok{color:#6ee7a1}.pp-warn{color:#ffd166}.pp-err{color:#ff8585}.pp-days label{margin-right:7px;white-space:nowrap}.pp-small{font-size:12px}@media(max-width:900px){.pp-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:600px){.pp-grid{grid-template-columns:1fr}.pp-table{font-size:12px}}
 </style>
 <div class="pp-wrap">
   <div class="pp-row"><div><h1>PowerPilot</h1><div class="pp-muted">Controllo profili CPU · Unraid 7.2</div></div><div style="margin-left:auto" class="pp-row"><button class="pp-btn" onclick="PP.refresh()">Aggiorna</button><button class="pp-btn" onclick="PP.apply('performance')">Performance ora</button><button class="pp-btn" onclick="PP.apply('power_super_save')">Super Save ora</button></div></div>
@@ -81,24 +136,96 @@ if ($isAjax) {
     <div id="pp-conditions"></div><button class="pp-btn" onclick="PP.addCondition()">Aggiungi condizione</button> <button class="pp-btn" onclick="PP.saveRule()">Salva regola</button> <button class="pp-btn" onclick="PP.cancelRule()">Annulla</button>
   </div>
   <div class="pp-card"><h3>Controllo manuale e sicurezza</h3><div class="pp-row"><div class="pp-field"><label>Override manuale</label><select id="pp-manual-profile"><option value="">Nessuno</option></select></div><div class="pp-field"><label>Durata (minuti, 0 = senza scadenza)</label><input id="pp-manual-duration" type="number" min="0" value="60"></div><button class="pp-btn" onclick="PP.setManual()">Imposta override</button><button class="pp-btn" onclick="PP.clearManual()">Rimuovi override</button><button id="pp-live-button" class="pp-btn" onclick="PP.toggleMode()">Attiva controllo live…</button></div><p class="pp-muted pp-small">In dry-run le regole vengono valutate e registrate, ma il controller non modifica governor o EPP. Le modifiche live riguardano solo questi due parametri.</p></div>
-  <div class="pp-card"><h3>Storico decisioni</h3><table class="pp-table"><thead><tr><th>Ora</th><th>Profilo</th><th>Applicato</th><th>Motivo</th></tr></thead><tbody id="pp-history"></tbody></table></div>
+  <div class="pp-card">
+    <h3>Rete: TCP e affinità IRQ delle NIC</h3>
+    <p class="pp-muted">Queste modifiche sono separate dai profili CPU. Entrambe sono disattivate inizialmente; salva le opzioni e usa il pulsante live dedicato per applicarle.</p>
+    <div class="pp-row">
+      <label><input id="pp-tcp-enabled" type="checkbox"> Ottimizza buffer TCP in base alla velocità delle NIC fisiche</label>
+      <label><input id="pp-irq-enabled" type="checkbox"> Distribuisci IRQ e code TX sui CPU selezionati</label>
+    </div>
+    <div class="pp-field"><label>CPU da riservare (separati da virgola; 0 è riservato per default)</label><input id="pp-network-reserved" value="0"></div>
+    <h4>Interfacce fisiche</h4>
+    <div id="pp-network-interfaces" class="pp-nic-list"></div>
+    <div class="pp-row">
+      <button class="pp-btn" onclick="PP.saveNetworkSettings()">Salva impostazioni rete</button>
+      <button id="pp-network-live-button" class="pp-btn pp-danger" onclick="PP.toggleNetworkMode()">Attiva tuning rete live</button>
+      <span id="pp-network-status" class="pp-muted"></span>
+    </div>
+    <div class="pp-row">
+      <div class="pp-field"><b>Piano TCP</b><div id="pp-tcp-plan" class="pp-small"></div></div>
+      <div class="pp-field"><b>Piano IRQ / XPS</b><div id="pp-irq-plan" class="pp-small"></div></div>
+    </div>
+    <p class="pp-warn pp-small">La gestione IRQ può influire sulla rete. Verifica prima in dry-run. AutoTweak deve essere disattivato o rimosso: PowerPilot blocca l’attivazione live se lo rileva.</p>
+  </div>  <div class="pp-card"><h3>Storico decisioni</h3><table class="pp-table"><thead><tr><th>Ora</th><th>Profilo</th><th>Applicato</th><th>Motivo</th></tr></thead><tbody id="pp-history"></tbody></table></div>
 </div>
 <script>
 window.PowerPilotPage=(function(){
-  const endpoint=window.location.pathname; let data=null, settingsLoaded=false, editingSchedule=-1, editingRule=null;
+  const endpoint=window.location.pathname; let data=null, settingsLoaded=false, networkInputsInitialized=false, editingSchedule=-1, editingRule=null;
   const profiles=['performance','balanced','power_save','power_super_save'], labels={performance:'Performance',balanced:'Balanced',power_save:'Power Save',power_super_save:'Power Super Save'};
   const types=['cpu_busy_gte','load1_gte','memory_used_gte','io_mbps_gte','network_mbps_gte','docker_running','docker_cpu_gte','process_running','process_cpu_gte','tcp_connections_gte','game_players_gte'];
   const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   function say(message,error=false){const e=document.getElementById('pp-message');e.textContent=message;e.className='pp-banner '+(error?'pp-err':'pp-ok');e.style.display='block';setTimeout(()=>e.style.display='none',6000)}
   async function request(action,payload={}){const body=new URLSearchParams({action,csrf_token:data?.csrf_token||'',payload:JSON.stringify(payload)});const r=await fetch(endpoint+'?ajax=1',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8','Accept':'application/json'},body,credentials:'same-origin'});const j=await r.json();if(!r.ok)throw new Error(j.error||'Richiesta non riuscita');return j}
-  async function refresh(){try{const r=await fetch(endpoint+'?ajax=1',{headers:{'Accept':'application/json'},credentials:'same-origin'});data=await r.json();if(!r.ok)throw new Error(data.error);render()}catch(e){say(e.message,true)}}
+  async function refresh(){try{const r=await fetch(endpoint+'?ajax=1',{headers:{'Accept':'application/json'},credentials:'same-origin'});data=await r.json();if(!r.ok)throw new Error(data.error);render();renderNetwork()}catch(e){say(e.message,true)}}
   function profileOptions(selected){return profiles.map(p=>`<option value="${p}" ${p===selected?'selected':''}>${labels[p]}</option>`).join('')}
   function render(){const s=data.state||{},m=s.metrics||{};document.getElementById('pp-profile').textContent=labels[s.active_profile]||'In attesa';document.getElementById('pp-reason').textContent=s.last_reason||'—';document.getElementById('pp-base').textContent=labels[data.base_profile]||data.base_profile;document.getElementById('pp-base-reason').textContent=data.base_reason;document.getElementById('pp-cpu').textContent=(m.cpu_busy||0).toFixed(1)+'%';document.getElementById('pp-memory').textContent='Memoria '+(m.memory_used||0).toFixed(1)+'% · load '+(m.load1||0).toFixed(2);document.getElementById('pp-io').textContent=(m.io_mbps||0).toFixed(1)+' MB/s';document.getElementById('pp-net').textContent=(m.network_mbps||0).toFixed(1)+' Mb/s';document.getElementById('pp-mode').innerHTML=data.config.dry_run?'<b class="pp-warn">DRY-RUN</b>':'<b class="pp-err">LIVE</b>';document.getElementById('pp-current').textContent=(data.current.governor||'?')+' / '+(data.current.epp||'?');document.getElementById('pp-manual').textContent=data.config.manual_override?'Override: '+(labels[data.config.manual_override.profile]||''):'Automatico';document.getElementById('pp-error').textContent=s.config_error||'';document.getElementById('pp-live-button').textContent=data.config.dry_run?'Attiva controllo live…':'Torna a dry-run';document.getElementById('pp-enabled-button').textContent=data.config.enabled?'Pausa automazione':'Riattiva automazione';document.getElementById('pp-next').textContent=s.next_reevaluation?new Date(s.next_reevaluation*1000).toLocaleTimeString():'—';
     ['pp-s-profile','pp-rule-profile','pp-default-profile'].forEach(id=>{if(!document.querySelector('#'+id+' option'))document.getElementById(id).innerHTML=profileOptions(profiles[0])});if(!settingsLoaded){document.getElementById('pp-default-profile').value=data.config.default_profile;document.getElementById('pp-dwell').value=data.config.min_dwell_sec;document.getElementById('pp-interval').value=data.config.check_interval_sec;settingsLoaded=true;}const manualSelect=document.getElementById('pp-manual-profile'),manualSelected=manualSelect.value;manualSelect.innerHTML='<option value="">Nessuno</option>'+profileOptions(data.config.manual_override?.profile||'');if(manualSelected)manualSelect.value=manualSelected;
     document.getElementById('pp-schedules').innerHTML=(data.config.schedule||[]).map((x,i)=>`<tr><td>${esc(x.days.join(', '))}</td><td>${esc(x.start)}</td><td>${esc(x.end)}</td><td>${esc(labels[x.profile]||x.profile)}</td><td><button class="pp-btn" onclick="PowerPilotPage.editSchedule(${i})">Modifica</button> <button class="pp-btn pp-danger" onclick="PowerPilotPage.deleteSchedule(${i})">Elimina</button></td></tr>`).join('');
     document.getElementById('pp-rules').innerHTML=(data.config.rules||[]).slice().sort((a,b)=>b.priority-a.priority).map(r=>`<tr><td>${r.priority}</td><td>${esc(r.name||r.id)}${r.enabled?'':' <span class="pp-muted">(spenta)</span>'}</td><td>${esc(r.match||'all')}</td><td>${r.conditions.length} condizione/i</td><td>${esc(labels[r.profile]||r.profile)}</td><td><button class="pp-btn" onclick="PowerPilotPage.editRule('${esc(r.id)}')">Modifica</button> <button class="pp-btn pp-danger" onclick="PowerPilotPage.deleteRule('${esc(r.id)}')">Elimina</button></td></tr>`).join('');
     document.getElementById('pp-history').innerHTML=(data.history||[]).map(e=>`<tr><td>${esc(e.ts)}</td><td>${esc(labels[e.profile]||e.profile)}</td><td>${e.applied?'Sì':e.dry_run?'Dry-run':'No'}</td><td>${esc(e.reason)}</td></tr>`).join('')}
-  function renderDays(selected=[]){document.getElementById('pp-days').innerHTML=['Lun','Mar','Mer','Gio','Ven','Sab','Dom'].map((n,i)=>`<label><input type="checkbox" value="${i}" ${selected.includes(i)?'checked':''}>${n}</label>`).join('')}
+  function renderNetwork(){
+    const network=data.config.network||{}, plan=data.network_plan||{}, status=data.state.network_status||{};
+    const interfaces=plan.available_interfaces||[];
+    if(!networkInputsInitialized){
+      document.getElementById('pp-tcp-enabled').checked=Boolean(network.tcp_enabled);
+      document.getElementById('pp-irq-enabled').checked=Boolean(network.irq_enabled);
+      document.getElementById('pp-network-reserved').value=(network.reserved_cpus||[0]).join(',');
+      document.getElementById('pp-network-interfaces').innerHTML=interfaces.map(nic=>{
+        const checked=(network.interfaces||[]).includes(nic.name)?'checked':'';
+        const speed=nic.speed_mbps?`${nic.speed_mbps} Mb/s`:'velocità sconosciuta';
+        return `<label class="pp-nic"><input class="pp-nic-check" type="checkbox" value="${esc(nic.name)}" ${checked}> <b>${esc(nic.name)}</b> · ${esc(nic.driver)} · ${speed} · ${nic.rx_queues} RX / ${nic.tx_queues} TX</label>`;
+      }).join('')||'<span class="pp-muted">Nessuna NIC fisica rilevata.</span>';
+      networkInputsInitialized=true;
+    }
+
+    const live=Boolean(network.live_enabled);
+    const liveButton=document.getElementById('pp-network-live-button');
+    liveButton.textContent=live?'Disattiva tuning rete e ripristina':'Attiva tuning rete live';
+    liveButton.disabled=!live&&Boolean(plan.autotweak_detected);
+    const result=status.errors?.length?` — errori: ${status.errors.join('; ')}`:'';
+    document.getElementById('pp-network-status').textContent=plan.autotweak_detected
+      ?'AutoTweak rilevato: tuning live bloccato.'
+      :live?(status.applied?'Tuning live applicato.':'Tuning live in attesa di applicazione.')+result
+      :'Anteprima: nessuna modifica al kernel.';
+
+    const tcpRows=Object.entries(plan.tcp?.settings||{}).map(([key,value])=>`<tr><td>${esc(key)}</td><td>${esc(value)}</td><td>${esc(plan.tcp.current?.[key]??'non disponibile')}</td></tr>`).join('');
+    document.getElementById('pp-tcp-plan').innerHTML=`Velocità fisica massima: ${plan.tcp?.max_speed_mbps||0} Mb/s<table class="pp-table"><thead><tr><th>Parametro</th><th>Proposto</th><th>Attuale</th></tr></thead><tbody>${tcpRows}</tbody></table>`;
+    const irqRows=(plan.irq?.interfaces||[]).map(nic=>{
+      const irq=nic.irq_assignments.map(x=>`IRQ ${x.irq} → CPU ${x.cpu??'—'}`).join(', ')||'IRQ non rilevati';
+      const tx=nic.tx_assignments.map(x=>`TX ${x.queue} → CPU ${x.cpu??'—'}`).join(', ')||'nessuna coda TX';
+      const warnings=nic.warnings.map(esc).join('; ');
+      return `<tr><td>${esc(nic.name)}</td><td>${esc(irq)}</td><td>${esc(tx)}</td><td>${warnings}</td></tr>`;
+    }).join('');
+    document.getElementById('pp-irq-plan').innerHTML=`CPU riservate: ${esc((plan.irq?.reserved_cpus||[]).join(', '))}<table class="pp-table"><thead><tr><th>NIC</th><th>IRQ</th><th>XPS</th><th>Note</th></tr></thead><tbody>${irqRows||'<tr><td colspan="4">Seleziona una NIC per vedere il piano.</td></tr>'}</tbody></table>`;
+  }
+  async function saveNetworkSettings(){
+    const reservedText=document.getElementById('pp-network-reserved').value.trim();
+    const reserved=reservedText===''?[]:reservedText.split(',').map(value=>value.trim());
+    if(reserved.some(value=>!/^\d+$/.test(value)))return say('La lista CPU deve contenere solo numeri separati da virgole.',true);
+    data.config.network=data.config.network||{};
+    data.config.network.tcp_enabled=document.getElementById('pp-tcp-enabled').checked;
+    data.config.network.irq_enabled=document.getElementById('pp-irq-enabled').checked;
+    data.config.network.interfaces=[...document.querySelectorAll('.pp-nic-check:checked')].map(input=>input.value);
+    data.config.network.reserved_cpus=reserved.map(Number);
+    try{await request('save_config',{config:data.config});networkInputsInitialized=false;await refresh();say('Impostazioni rete salvate; il piano è ancora in dry-run.')}catch(e){say(e.message,true)}
+  }
+  async function toggleNetworkMode(){
+    const live=Boolean(data.config.network?.live_enabled);
+    if(!live&&data.network_plan?.autotweak_detected)return say('Disattiva o rimuovi AutoTweak prima di applicare il tuning rete.',true);
+    const prompt=live?'Ripristinare i valori di rete salvati prima dell’attivazione?':'PowerPilot modificherà parametri TCP e affinità IRQ/XPS delle NIC selezionate. Continuare?';
+    if(!confirm(prompt))return;
+    try{const result=await request('network_mode',{mode:live?'dry_run':'live',confirmed:true});await refresh();say(live?'Valori di rete ripristinati.':result.applied?'Tuning rete applicato.':'Applicazione incompleta: '+(result.errors||[]).join('; '),!live&&!result.applied)}catch(e){say(e.message,true)}
+  }  function renderDays(selected=[]){document.getElementById('pp-days').innerHTML=['Lun','Mar','Mer','Gio','Ven','Sab','Dom'].map((n,i)=>`<label><input type="checkbox" value="${i}" ${selected.includes(i)?'checked':''}>${n}</label>`).join('')}
   function saveSchedule(){const days=[...document.querySelectorAll('#pp-days input:checked')].map(x=>Number(x.value));if(!days.length)return say('Seleziona almeno un giorno.',true);const row={days,start:document.getElementById('pp-start').value,end:document.getElementById('pp-end').value,profile:document.getElementById('pp-s-profile').value};if(!row.start||!row.end)return say('Inserisci entrambi gli orari.',true);if(editingSchedule>=0)data.config.schedule[editingSchedule]=row;else data.config.schedule.push(row);persist('Schedule aggiornata.')}
   function editSchedule(i){const x=data.config.schedule[i];editingSchedule=i;document.getElementById('pp-start').value=x.start;document.getElementById('pp-end').value=x.end;document.getElementById('pp-s-profile').value=x.profile;renderDays(x.days);document.getElementById('pp-schedule-title').textContent='Modifica intervallo'}
   function cancelSchedule(){editingSchedule=-1;document.getElementById('pp-start').value='18:00';document.getElementById('pp-end').value='06:00';renderDays([0,1,2,3,4,5,6]);document.getElementById('pp-schedule-title').textContent='Aggiungi intervallo'}
@@ -116,7 +243,7 @@ window.PowerPilotPage=(function(){
   async function clearManual(){try{await request('manual',{profile:null});await refresh();say('Override rimosso.')}catch(e){say(e.message,true)}}
   async function toggleMode(){const live=data.config.dry_run;if(live&&!confirm('Tornare a dry-run?'))return;if(!live&&!confirm('ATTENZIONE: il controller modificherà governor ed EPP del server. Continuare?'))return;try{await request('mode',{mode:live?'dry_run':'live',confirmed:true});await refresh();say(live?'Dry-run attivato.':'Controllo live attivato.')}catch(e){say(e.message,true)}}
   renderDays([0,1,2,3,4,5,6]);cancelRule();refresh();setInterval(refresh,5000);
-  return{refresh,saveSchedule,editSchedule,cancelSchedule,deleteSchedule,addCondition,saveRule,editRule,cancelRule,deleteRule,saveSettings,toggleEnabled,apply,setManual,clearManual,toggleMode};
+  return{refresh,saveSchedule,editSchedule,cancelSchedule,deleteSchedule,addCondition,saveRule,editRule,cancelRule,deleteRule,saveSettings,toggleEnabled,apply,setManual,clearManual,toggleMode,saveNetworkSettings,toggleNetworkMode};
 })();
 window.PP=window.PowerPilotPage;
 </script>

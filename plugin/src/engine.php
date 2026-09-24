@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 namespace PowerPilot;
 
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 const CONFIG_DIR = '/boot/config/plugins/powerpilot';
 const CONFIG_FILE = CONFIG_DIR . '/config.json';
 const DATA_DIR = '/mnt/user/appdata/powerpilot';
@@ -11,11 +11,20 @@ const STATE_FILE = DATA_DIR . '/state.json';
 const HISTORY_FILE = DATA_DIR . '/history.jsonl';
 const SYS_CPU = '/sys/devices/system/cpu';
 
+require_once __DIR__ . '/network.php';
+
 function defaults(): array
 {
     return [
         'enabled' => true, 'dry_run' => true, 'check_interval_sec' => 10,
         'min_dwell_sec' => 300, 'default_profile' => 'balanced', 'manual_override' => null,
+        'network' => [
+            'tcp_enabled' => false,
+            'irq_enabled' => false,
+            'interfaces' => [],
+            'reserved_cpus' => [0],
+            'live_enabled' => false,
+        ],
         'schedule' => [
             ['days' => [0,1,2,3,4,5,6], 'start' => '06:00', 'end' => '18:00', 'profile' => 'performance'],
             ['days' => [0,1,2,3,4,5,6], 'start' => '18:00', 'end' => '06:00', 'profile' => 'power_super_save'],
@@ -59,8 +68,13 @@ function loadConfig(): array
     if (!is_file(CONFIG_FILE)) {
         $legacy = '/mnt/user/appdata/dynamic-power-manager/config.json';
         $cfg = is_file($legacy) ? json_decode((string)file_get_contents($legacy), true) : null;
-        if (!is_array($cfg) || !validConfig($cfg, $error)) $cfg = defaults();
+        if (!is_array($cfg) || !validConfig($cfg, $error)) {
+            $cfg = defaults();
+        } else {
+            $cfg = configWithDefaults($cfg);
+        }
         $cfg['dry_run'] = true;
+        $cfg['network']['live_enabled'] = false;
         atomicJson(CONFIG_FILE, $cfg);
         return $cfg;
     }
@@ -68,9 +82,16 @@ function loadConfig(): array
     if (!is_array($cfg) || !validConfig($cfg, $error)) {
         throw new \RuntimeException('Invalid config: ' . ($error ?? 'JSON parse error'));
     }
-    return array_replace(defaults(), $cfg);
+    return configWithDefaults($cfg);
 }
 
+function configWithDefaults(array $cfg): array
+{
+    $defaults = defaults();
+    $merged = array_replace($defaults, $cfg);
+    $merged['network'] = array_replace($defaults['network'], $cfg['network'] ?? []);
+    return $merged;
+}
 function saveConfig(array $cfg): void
 {
     if (!validConfig($cfg, $error)) throw new \InvalidArgumentException($error);
@@ -95,6 +116,28 @@ function validConfig(array $cfg, ?string &$error = null): bool
     }
     if (!in_array($cfg['default_profile'], $profiles, true)) { $error='Invalid default profile'; return false; }
     if (!is_array($cfg['profiles']) || !is_array($cfg['schedule']) || !is_array($cfg['rules'])) { $error='Profiles, schedule and rules must be lists/objects'; return false; }
+    $network = $cfg['network'] ?? defaults()['network'];
+    if (!is_array($network)
+        || (isset($network['tcp_enabled']) && !is_bool($network['tcp_enabled']))
+        || (isset($network['irq_enabled']) && !is_bool($network['irq_enabled']))
+        || (isset($network['live_enabled']) && !is_bool($network['live_enabled']))
+        || !is_array($network['interfaces'] ?? [])
+        || !is_array($network['reserved_cpus'] ?? [0])) {
+        $error = 'Invalid network tuning configuration';
+        return false;
+    }
+    foreach ($network['interfaces'] ?? [] as $interface) {
+        if (!is_string($interface) || !preg_match('/^[a-zA-Z0-9_.:-]{1,16}$/', $interface)) {
+            $error = 'Invalid network interface name';
+            return false;
+        }
+    }
+    foreach ($network['reserved_cpus'] ?? [0] as $cpu) {
+        if (!is_int($cpu) || $cpu < 0 || $cpu > 4095) {
+            $error = 'Reserved CPU IDs must be integers from 0 to 4095';
+            return false;
+        }
+    }
     $interval=(int)($cfg['check_interval_sec']??10); $dwell=(int)($cfg['min_dwell_sec']??300);
     if($interval<2||$interval>3600||$dwell<0||$dwell>86400){$error='Invalid controller timing values';return false;}
     if(isset($cfg['manual_override'])&&$cfg['manual_override']!==null&&!in_array($cfg['manual_override']['profile']??'',$profiles,true)){$error='Invalid manual override';return false;}
@@ -291,9 +334,66 @@ function appendEvent(array $event): void
     ensureDirs();$json=json_encode($event,JSON_UNESCAPED_SLASHES|JSON_INVALID_UTF8_SUBSTITUTE);if($json!==false)file_put_contents(HISTORY_FILE,$json."\n",FILE_APPEND|LOCK_EX);
 }
 
+function networkConfigHash(array $network): string
+{
+    $relevant = [
+        'tcp_enabled' => !empty($network['tcp_enabled']),
+        'irq_enabled' => !empty($network['irq_enabled']),
+        'interfaces' => array_values($network['interfaces'] ?? []),
+        'reserved_cpus' => array_values($network['reserved_cpus'] ?? [0]),
+    ];
+    return hash('sha256', (string)json_encode($relevant));
+}
+
+function applyConfiguredNetwork(array $cfg, array &$state): void
+{
+    $network = $cfg['network'] ?? defaults()['network'];
+    if (empty($network['live_enabled']) || (empty($network['tcp_enabled']) && empty($network['irq_enabled']))) {
+        return;
+    }
+
+    $plan = networkPlan($cfg);
+    if ($plan['autotweak_detected']) {
+        $restore = restoreNetworkSettings($state);
+        $cfg['network']['live_enabled'] = false;
+        saveConfig($cfg);
+        $state['network_status'] = [
+            'live_enabled' => false,
+            'applied' => false,
+            'errors' => array_merge(['AutoTweak detected; network tuning disabled to avoid competing writes.'], $restore['errors']),
+            'updated_at' => date(DATE_ATOM),
+        ];
+        return;
+    }
+
+    $bootId = networkReadValue('/proc/sys/kernel/random/boot_id') ?? 'unknown';
+    $configHash = networkConfigHash($network);
+    $previous = $state['network_status'] ?? [];
+    $newBoot = ($previous['boot_id'] ?? null) !== $bootId;
+    $changedConfig = ($previous['config_hash'] ?? null) !== $configHash;
+    if (!$newBoot && !$changedConfig && !empty($previous['applied'])) {
+        return;
+    }
+
+    if ($newBoot) {
+        unset($state['network_original']);
+    } elseif ($changedConfig) {
+        restoreNetworkSettings($state);
+    }
+
+    $result = applyNetworkPlan($cfg, $state);
+    $state['network_status'] = [
+        'live_enabled' => true,
+        'applied' => $result['applied'],
+        'errors' => $result['errors'],
+        'updated_at' => date(DATE_ATOM),
+    ];
+    $state['network_status']['boot_id'] = $bootId;
+    $state['network_status']['config_hash'] = $configHash;
+}
 function runTick(): array
 {
-    $cfg=loadConfig();$state=loadState();$metrics=readProcMetrics($state);$containers=dockerStats();$metrics['docker_count']=count($containers);$metrics['docker_running']=count(array_filter($containers,fn($c)=>$c['running']));$metrics['processes']=processCpuMap();$state['metrics']=$metrics;
+    $cfg=loadConfig();$state=loadState();applyConfiguredNetwork($cfg,$state);$metrics=readProcMetrics($state);$containers=dockerStats();$metrics['docker_count']=count($containers);$metrics['docker_running']=count(array_filter($containers,fn($c)=>$c['running']));$metrics['processes']=processCpuMap();$state['metrics']=$metrics;
     if(!empty($cfg['manual_override']['expires_at']) && time() >= (int)$cfg['manual_override']['expires_at']) { $cfg['manual_override']=null; saveConfig($cfg); }
     if(!empty($cfg['enabled'])){[$profile,$reason]=decide($cfg,$metrics,$containers,$state);$state['desired_profile']=$profile;$state['decision_reason']=$reason;applyProfile($profile,$reason,$cfg,$state);}
     $state['next_reevaluation']=time()+max(2,(int)$cfg['check_interval_sec']);$state['config_error']=null;atomicJson(STATE_FILE,$state);return $state;
@@ -313,6 +413,7 @@ function history(int $limit=100): array
 
 if (PHP_SAPI === 'cli' && realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === __FILE__) {
     $command=$argv[1]??'daemon';
+    if($command==='restore-network'){$state=loadState();$hadState=is_file(STATE_FILE);$hadOriginals=!empty($state['network_original']);$result=restoreNetworkSettings($state);if($hadState||$hadOriginals)atomicJson(STATE_FILE,$state);if($result['errors']){fwrite(STDERR,implode(PHP_EOL,$result['errors']).PHP_EOL);exit(1);}exit(0);}
     if($command==='tick'){try{runTick();}catch(\Throwable $e){fwrite(STDERR,$e->getMessage()."\n");exit(1);}exit(0);}
     if($command==='daemon') { while(true){try{runTick();}catch(\Throwable $e){error_log('[PowerPilot] '.$e->getMessage());$state=loadState();$state['config_error']=$e->getMessage();atomicJson(STATE_FILE,$state);} $cfg=is_file(CONFIG_FILE)?json_decode((string)file_get_contents(CONFIG_FILE),true):[];sleep(max(2,(int)($cfg['check_interval_sec']??10)));} }
     fwrite(STDERR,"Usage: php engine.php [daemon|tick]\n");exit(2);

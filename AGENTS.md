@@ -11,11 +11,11 @@ The primary host is a Dell PowerEdge R740 with an Intel Xeon Gold 6146 (24 logic
 ## Safety boundaries
 
 - Keep Unraid online. Never add sleep or shutdown behavior.
-- Live control changes only CPU governor and EPP.
+- Live control may change CPU governor/EPP plus explicitly enabled TCP buffers and selected NIC IRQ/XPS CPU affinity.
 - Do not dynamically change SATA link power management, PCIe ASPM, NVMe policy, HBA/controller state or disk spin-down.
 - New installations and migrated configurations must start in dry-run. Require an explicit WebGUI confirmation to enable live writes.
 - Treat the plugin page as privileged host control. Keep writes behind Unraid WebGUI authentication and CSRF validation.
-- Coordinate CPU ownership with Autotweak.
+- Refuse network live mode while AutoTweak is installed; CPU governor/EPP ownership must also be coordinated.
 
 ## Product behavior
 
@@ -26,16 +26,22 @@ Rules stay generic: host metrics, Docker container state/CPU, processes, TCP con
 ## Architecture
 
 - The Unraid .plg installer installs a Slackware package with the WebGUI .page, PHP engine and service script.
-- PHP CLI runs the controller on the host; collect Linux metrics from procfs/sysfs and Docker data through the host Docker CLI.
+- PHP CLI runs the controller on the host; collect Linux metrics from procfs/sysfs, Docker data through the host Docker CLI, and network tuning through sysctl procfs and NIC IRQ/XPS sysfs.
 - Keep configuration in /boot/config/plugins/powerpilot/; put frequent state and history writes under /mnt/user/appdata/powerpilot/.
 - Keep schedule/rule evaluation deterministic and independently testable.
+- Keep TCP and NIC tuning disabled by default; require its own explicit live confirmation, preserve original values, and restore them when disabled/uninstalled.
 - Do not add a PowerPilot Docker deployment.
 
+## Source readability and preservation
+
+- Keep authored source code readable for manual maintenance. Do not minify, compress or collapse PHP, JavaScript, shell, YAML or other source into long one-line blocks; use normal indentation and line breaks, with one logical operation per line where practical.
+- Preserve existing source files and their implementation, especially files with many lines of code. Do not truncate, replace with stubs or delete substantial code just to simplify a change; refactor in small, reviewable edits and retain unrelated behavior.
+- Generated release artifacts may use packaging formats required by their tools, but the maintained source must remain human-readable.
 ## Development rules
 
 - Preserve the existing JSON configuration shape where practical and import the old Docker app configuration on first start, forcing dry-run.
 - Add checks for rule types, precedence, schedule boundaries, hold/dwell and dry-run safety.
 - Update README.md, RULES.md and CHANGELOG.md for behavior changes.
-- Version user-visible feature releases according to the 0.1.x → 0.2.x line.
+- Version user-visible feature releases with semantic minor increments (0.x).
 - Validate PHP syntax and package construction. Do not claim successful installation without testing on Unraid 7.2.
 - Uninstall must stop the service and remove plugin files while preserving user configuration and event history.

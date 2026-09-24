@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0 - 2026-09-24
+
+- Added optional TCP buffer tuning and selected NIC IRQ/XPS affinity with a read-only plan and a separate live confirmation.
+- Added AutoTweak conflict detection and restoration of captured network values when disabled or uninstalled.
+- Kept both network features off by default and independent from CPU profile live control.
+
+## 0.2.1 - 2026-09-24
+
+- Fixed plugin package installation and removal commands in the .plg lifecycle.
+- Added the required WebGUI page metadata, boot/shutdown service hooks and clean upgrade restart.
+
+
 ## 0.2.0 - 2026-09-24
 
 - Replaced the Docker/FastAPI deployment with a native Unraid plugin package and WebGUI page.

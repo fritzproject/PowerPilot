@@ -29,3 +29,8 @@ Minecraft RCON configuration example:
     {"type":"game_players_gte","value":1,"query":{"protocol":"minecraft_rcon","host":"192.168.1.51","port":25575,"password":"secret"}}
 
 The plugin queries Docker on the host; PowerPilot itself is not a container. If a game has no query protocol, use container, process, port or host-metric rules. Prefer player counts when available and use hold_sec (10–30 seconds) plus min_dwell_sec (3–10 minutes) to reduce profile flapping.
+## Network tuning
+
+Network tuning is separate from CPU profiles and is disabled by default. Enable TCP tuning to preview buffer sizes selected from the fastest negotiated physical NIC. Enable IRQ affinity to select physical NICs and distribute their dedicated IRQs and transmit queue XPS masks across NUMA-local online CPUs. CPU 0 is reserved by default; the reserved CPU list can be edited in the GUI.
+
+The preview reports detected interfaces, drivers, speeds, queue counts, current TCP values and proposed IRQ/XPS placement. Unknown speeds use only MTU probing; unsupported IRQs are skipped and reported. Applying the network plan needs a separate explicit live confirmation. PowerPilot captures the current kernel values and restores them when network live mode is disabled or on plugin removal. AutoTweak must be disabled or removed; network live mode is blocked while PowerPilot detects it.

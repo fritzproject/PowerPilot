@@ -1,27 +1,25 @@
 <?xml version="1.0"?>
-<PLUGIN name="powerpilot" author="PowerPilot" version="@VERSION@" pluginURL="https://github.com/Fritzproject/PowerPilot/releases/latest/download/powerpilot.plg" min="7.2.0" support="https://github.com/Fritzproject/PowerPilot/issues">
+<PLUGIN name="powerpilot" author="PowerPilot" version="@VERSION@" launch="Settings/PowerPilot" pluginURL="https://github.com/Fritzproject/PowerPilot/releases/latest/download/powerpilot.plg" min="7.2.0" support="https://github.com/Fritzproject/PowerPilot/issues">
   <CHANGES>
     ### @VERSION@
     - Native Unraid plugin with dry-run default.
     - CPU profiles, schedules, workload rules and game queries.
   </CHANGES>
-  <FILE Name="/boot/config/plugins/powerpilot/powerpilot-@VERSION@.txz">
+  <FILE Run="/bin/bash">
+    <INLINE>
+      if [ -x /etc/rc.d/rc.powerpilot ]; then /etc/rc.d/rc.powerpilot stop || true; fi
+    </INLINE>
+  </FILE>
+  <FILE Name="/boot/config/plugins/powerpilot/powerpilot-@VERSION@.txz" Run="upgradepkg --install-new">
     <URL>https://github.com/Fritzproject/PowerPilot/releases/download/v@VERSION@/powerpilot-@VERSION@.txz</URL>
     <SHA256>@SHA256@</SHA256>
   </FILE>
-  <FILE Run="upgrade">
+  <FILE Run="/bin/bash" Method="remove">
     <INLINE>
       <![CDATA[
         if [ -x /etc/rc.d/rc.powerpilot ]; then /etc/rc.d/rc.powerpilot stop; fi
-        upgradepkg --install-new /boot/config/plugins/powerpilot/powerpilot-@VERSION@.txz
-        /etc/rc.d/rc.powerpilot start
-      ]]>
-    </INLINE>
-  </FILE>
-  <FILE Run="remove">
-    <INLINE>
-      <![CDATA[
-        if [ -x /etc/rc.d/rc.powerpilot ]; then /etc/rc.d/rc.powerpilot stop; fi
+        if [ ! -x /usr/bin/php ]; then logger -t powerpilot "Cannot restore network settings: PHP runtime missing"; exit 1; fi
+        /usr/bin/php /usr/local/emhttp/plugins/powerpilot/src/engine.php restore-network || exit 1
         removepkg powerpilot 2>/dev/null || true
         rm -rf /usr/local/emhttp/plugins/powerpilot
         rm -f /etc/rc.d/rc.powerpilot /var/run/powerpilot.pid
