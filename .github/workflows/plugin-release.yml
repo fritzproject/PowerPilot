@@ -1,4 +1,4 @@
-name: Plugin release
+﻿name: Plugin release
 on:
   push:
     tags:
@@ -11,27 +11,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: shivammathur/setup-php@v2
-        with:
-          php-version: "8.3"
-      - name: Validate PHP syntax
+      - name: Validate PHP and run tests
         run: |
-          php -l plugin/src/engine.php
-          php -l plugin/src/network.php
-          php -l plugin/webui/powerpilot.page
-      - name: Test decision engine
-        run: |
-          set +e
-          php plugin/tests/engine_test.php > "$RUNNER_TEMP/engine-test.log" 2>&1
-          result=$?
-          cat "$RUNNER_TEMP/engine-test.log"
-          if [ "$result" -ne 0 ]; then
-            echo "### Decision engine test failure" >> "$GITHUB_STEP_SUMMARY"
-            cat "$RUNNER_TEMP/engine-test.log" >> "$GITHUB_STEP_SUMMARY"
-          fi
-          exit "$result"
-      - name: Test network tuning
-        run: php plugin/tests/network_test.php
+          docker run --rm -v "$GITHUB_WORKSPACE:/work" -w /work php:8.3-cli sh -lc '
+            php -l plugin/src/engine.php
+            php -l plugin/src/network.php
+            php -l plugin/webui/powerpilot.page
+            php plugin/tests/engine_test.php
+            php plugin/tests/network_test.php
+          '
       - name: Build Unraid package
         run: |
           TAG_VERSION="$(git describe --tags --abbrev=0 | sed 's/^v//')"
