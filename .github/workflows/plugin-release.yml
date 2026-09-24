@@ -14,14 +14,15 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: "8.3"
-      - name: Validate PHP
+      - name: Validate PHP syntax
         run: |
           php -l plugin/src/engine.php
           php -l plugin/src/network.php
           php -l plugin/webui/powerpilot.page
-          php plugin/tests/engine_test.php
-          php plugin/tests/network_test.php
-      - name: Build Unraid package
+      - name: Test decision engine
+        run: php plugin/tests/engine_test.php
+      - name: Test network tuning
+        run: php plugin/tests/network_test.php      - name: Build Unraid package
         run: |
           TAG_VERSION="$(git describe --tags --abbrev=0 | sed 's/^v//')"
           VERSION="$(cat plugin/VERSION)"
