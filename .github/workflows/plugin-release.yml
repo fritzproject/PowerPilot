@@ -22,7 +22,8 @@ jobs:
       - name: Test decision engine
         run: php plugin/tests/engine_test.php
       - name: Test network tuning
-        run: php plugin/tests/network_test.php      - name: Build Unraid package
+        run: php plugin/tests/network_test.php
+      - name: Build Unraid package
         run: |
           TAG_VERSION="$(git describe --tags --abbrev=0 | sed 's/^v//')"
           VERSION="$(cat plugin/VERSION)"
