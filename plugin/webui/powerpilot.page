@@ -4,117 +4,6 @@ Icon="microchip"
 Type="php"
 Markdown="false"
 ---
-<?php
-$pluginRoot = rtrim((string)($docroot ?? '/usr/local/emhttp'), '/') . '/plugins/powerpilot';
-require_once $pluginRoot . '/src/engine.php';
-
-use function PowerPilot\loadConfig;
-use function PowerPilot\saveConfig;
-use function PowerPilot\loadState;
-use function PowerPilot\atomicJson;
-use function PowerPilot\history;
-use function PowerPilot\currentProfile;
-use function PowerPilot\scheduledProfile;
-use function PowerPilot\applyProfile;
-use function PowerPilot\validConfig;
-use function PowerPilot\networkPlan;
-use function PowerPilot\networkConfigHash;
-use function PowerPilot\applyNetworkPlan;
-use function PowerPilot\restoreNetworkSettings;
-
-$var = $var ?? [];
-$isAjax = isset($_GET['ajax']) || isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false;
-$reply = static function (array $body, int $code = 200): void { http_response_code($code); header('Content-Type: application/json; charset=utf-8'); echo json_encode($body, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE); exit; };
-if ($isAjax) {
-    try {
-        $cfg = loadConfig();
-        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
-            $input = $_POST;
-            $posted = json_decode((string)($input['payload'] ?? '{}'), true);
-            if (!is_array($posted)) $reply(['error'=>'Invalid request payload'],400);
-            $input = array_merge($input,$posted);
-            $csrf = (string)($var['csrf_token'] ?? '');
-            if ($csrf === '' || !hash_equals($csrf, (string)($input['csrf_token'] ?? ''))) $reply(['error'=>'Invalid CSRF token'],403);
-            $action = (string)($input['action'] ?? ''); $state = loadState();
-            if ($action === 'save_config') {
-                $next = $input['config'] ?? null;
-                if (!is_array($next)) $reply(['error'=>'Missing config'],400);
-                $next['dry_run'] = (bool)($cfg['dry_run'] ?? true);
-                $next = PowerPilot\configWithDefaults($next);
-                $next['network']['live_enabled'] = !empty($cfg['network']['live_enabled']);
-                if (!validConfig($next,$error)) $reply(['error'=>$error],400);
-                saveConfig($next); $reply(['ok'=>true]);
-            }
-            if ($action === 'mode') {
-                if (!in_array($input['mode'] ?? '', ['dry_run','live'], true) || empty($input['confirmed'])) $reply(['error'=>'Explicit mode confirmation required'],400);
-                $enableLive = $input['mode'] === 'live';
-                $wasDry = !empty($cfg['dry_run']);
-                $cfg['dry_run'] = !$enableLive; saveConfig($cfg);
-                if ($enableLive && $wasDry) { $state['active_profile']=null; $state['last_switch']=0; $state['last_applied']=false; atomicJson(PowerPilot\STATE_FILE,$state); }
-                $reply(['ok'=>true,'dry_run'=>$cfg['dry_run']]);
-            }
-            if ($action === 'network_mode') {
-                if (!in_array($input['mode'] ?? '', ['dry_run', 'live'], true) || empty($input['confirmed'])) {
-                    $reply(['error' => 'Explicit network mode confirmation required'], 400);
-                }
-
-                if ($input['mode'] === 'live') {
-                    $preview = networkPlan($cfg);
-                    if ($preview['autotweak_detected']) {
-                        $reply(['error' => 'AutoTweak is installed. Disable or uninstall it before enabling PowerPilot network tuning.'], 409);
-                    }
-                    if (empty($cfg['network']['tcp_enabled']) && empty($cfg['network']['irq_enabled'])) {
-                        $reply(['error' => 'Enable TCP tuning or NIC IRQ affinity and save first.'], 400);
-                    }
-                    if (!empty($cfg['network']['irq_enabled']) && empty($cfg['network']['interfaces'])) {
-                        $reply(['error' => 'Select at least one physical NIC for IRQ affinity.'], 400);
-                    }
-
-                    $cfg['network']['live_enabled'] = true;
-                    saveConfig($cfg);
-                    $result = applyNetworkPlan($cfg, $state);
-                    $state['network_status'] = [
-                        'live_enabled' => true,
-                        'applied' => $result['applied'],
-                        'errors' => $result['errors'],
-                        'updated_at' => date(DATE_ATOM),
-                    ];
-                    $state['network_status']['boot_id'] = networkReadValue('/proc/sys/kernel/random/boot_id') ?? 'unknown';
-                    $state['network_status']['config_hash'] = networkConfigHash($cfg['network']);
-                    atomicJson(PowerPilot\STATE_FILE, $state);
-                    $reply(['ok' => true, 'applied' => $result['applied'], 'errors' => $result['errors']]);
-                }
-
-                $cfg['network']['live_enabled'] = false;
-                saveConfig($cfg);
-                $restore = restoreNetworkSettings($state);
-                $state['network_status'] = [
-                    'live_enabled' => false,
-                    'applied' => empty($restore['errors']),
-                    'errors' => $restore['errors'],
-                    'updated_at' => date(DATE_ATOM),
-                ];
-                atomicJson(PowerPilot\STATE_FILE, $state);
-                $reply(['ok' => true, 'restored' => $restore['restored'], 'errors' => $restore['errors']]);
-            }
-            if ($action === 'manual') {
-                $profile=$input['profile']??null;
-                if ($profile !== null && !isset($cfg['profiles'][$profile])) $reply(['error'=>'Unknown profile'],400);
-                if ($profile===null) $cfg['manual_override']=null;
-                else { $duration=max(0,min(604800,(int)($input['duration_sec']??0))); $cfg['manual_override']=['profile'=>$profile,'expires_at'=>$duration>0?time()+$duration:null]; }
-                saveConfig($cfg); $reply(['ok'=>true]);
-            }
-            if ($action === 'apply') {
-                $profile=(string)($input['profile']??''); if(!isset($cfg['profiles'][$profile]))$reply(['error'=>'Unknown profile'],400);
-                $changed=applyProfile($profile,'manual apply',$cfg,$state,true); atomicJson(PowerPilot\STATE_FILE,$state); $reply(['ok'=>true,'changed'=>$changed,'dry_run'=>$cfg['dry_run']]);
-            }
-            $reply(['error'=>'Unknown action'],400);
-        }
-        [$base,$baseReason]=scheduledProfile($cfg,new DateTimeImmutable('now'));
-        $state=loadState(); $reply(['version'=>PowerPilot\VERSION,'config'=>$cfg,'state'=>$state,'current'=>currentProfile(),'base_profile'=>$base,'base_reason'=>$baseReason,'history'=>history(100),'network_plan'=>networkPlan($cfg),'csrf_token'=>(string)($var['csrf_token']??'')]);
-    } catch (Throwable $e) { $reply(['error'=>$e->getMessage()],500); }
-}
-?>
 <style>
 .pp-wrap{max-width:1420px;margin:18px auto;padding:0 18px;color:#e8edf5}.pp-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.pp-card{background:#20242b;border:1px solid #373d47;border-radius:9px;padding:16px;margin:12px 0}.pp-card h3{margin:0 0 12px}.pp-kpi{font-size:24px;font-weight:700;margin-top:5px}.pp-muted{color:#aeb7c4}.pp-row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.pp-field{display:flex;flex-direction:column;gap:4px;margin:5px 0;min-width:115px;flex:1}.pp-field input,.pp-field select{background:#11151b;color:#f4f6fa;border:1px solid #454c58;border-radius:4px;padding:7px}.pp-btn{border:1px solid #596477;border-radius:5px;background:#303946;color:#fff;padding:7px 11px;cursor:pointer}.pp-btn:hover{background:#3a485b}.pp-danger{background:#612e34}.pp-table{width:100%;border-collapse:collapse}.pp-table th,.pp-table td{text-align:left;padding:8px;border-bottom:1px solid #393f49;vertical-align:top}.pp-nic-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px}.pp-nic{border:1px solid #3a424e;border-radius:6px;padding:9px}.pp-condition{border:1px solid #3a424e;border-radius:6px;padding:10px;margin:8px 0}.pp-banner{padding:10px;border-radius:5px;background:#303946;margin:8px 0}.pp-ok{color:#6ee7a1}.pp-warn{color:#ffd166}.pp-err{color:#ff8585}.pp-days label{margin-right:7px;white-space:nowrap}.pp-small{font-size:12px}@media(max-width:900px){.pp-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:600px){.pp-grid{grid-template-columns:1fr}.pp-table{font-size:12px}}
 </style>
@@ -161,7 +50,7 @@ if ($isAjax) {
 </div>
 <script>
 window.PowerPilotPage=(function(){
-  const endpoint=window.location.pathname; let data=null, settingsLoaded=false, networkInputsInitialized=false, editingSchedule=-1, editingRule=null;
+  const endpoint='/plugins/powerpilot/api.php'; let data=null, settingsLoaded=false, networkInputsInitialized=false, editingSchedule=-1, editingRule=null;
   const profiles=['performance','balanced','power_save','power_super_save'], labels={performance:'Performance',balanced:'Balanced',power_save:'Power Save',power_super_save:'Power Super Save'};
   const types=['cpu_busy_gte','load1_gte','memory_used_gte','io_mbps_gte','network_mbps_gte','docker_running','docker_cpu_gte','process_running','process_cpu_gte','tcp_connections_gte','game_players_gte'];
   const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));

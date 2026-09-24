@@ -13,6 +13,7 @@ PowerPilot is a native Unraid plugin that selects CPU governor and Energy Perfor
 - CPU dry-run is enabled on first install. CPU live mode and network live mode require separate confirmations.
 - Optional TCP buffer tuning and NIC IRQ/XPS affinity are disabled by default and shown as a plan before changes.
 - PowerPilot detects AutoTweak and blocks network live mode while it is installed; changed TCP/IRQ/XPS values are restored when tuning is disabled or the plugin is removed.
+- The dashboard reads and writes through a dedicated WebGUI PHP endpoint, separate from the rendered `.page` document.
 
 ## Install on Unraid 7.2
 

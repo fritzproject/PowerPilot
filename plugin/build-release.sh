@@ -7,6 +7,7 @@ STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$OUT" "$STAGE/usr/local/emhttp/plugins/powerpilot/src" "$STAGE/usr/local/emhttp/plugins/powerpilot/event" "$STAGE/etc/rc.d" "$STAGE/install"
 install -m 0644 "$ROOT/plugin/webui/powerpilot.page" "$STAGE/usr/local/emhttp/plugins/powerpilot/powerpilot.page"
+install -m 0644 "$ROOT/plugin/webui/api.php" "$STAGE/usr/local/emhttp/plugins/powerpilot/api.php"
 install -m 0644 "$ROOT/plugin/src/engine.php" "$STAGE/usr/local/emhttp/plugins/powerpilot/src/engine.php"
 install -m 0644 "$ROOT/plugin/src/network.php" "$STAGE/usr/local/emhttp/plugins/powerpilot/src/network.php"
 install -m 0755 "$ROOT/plugin/rc.powerpilot" "$STAGE/etc/rc.d/rc.powerpilot"

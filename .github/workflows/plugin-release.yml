@@ -18,6 +18,7 @@ jobs:
             php -l plugin/src/engine.php
             php -l plugin/src/network.php
             php -l plugin/webui/powerpilot.page
+            php -l plugin/webui/api.php
             php plugin/tests/engine_test.php
             php plugin/tests/network_test.php
           '

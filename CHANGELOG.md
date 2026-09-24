@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.3 - 2026-09-24
+
+- Fixed dashboard data requests by moving AJAX handling to a dedicated PHP endpoint installed with the plugin.
+- Kept WebGUI CSRF validation for all state-changing requests and added JSON response headers to the endpoint.
+
 ## 0.3.2 - 2026-09-24
 
 - Fixed the WebGUI launch path to match the case-sensitive powerpilot.page filename.

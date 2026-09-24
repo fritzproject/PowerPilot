@@ -2,6 +2,8 @@
 
 Manage schedules and rules in the PowerPilot page in the Unraid WebGUI. Conditions can be combined with all (AND) or any (OR). A higher numeric priority wins when multiple rules match. Each rule has a hold time before activation; the global minimum dwell prevents rapid profile switching.
 
+The dashboard fetches its state from the plugin's dedicated PHP endpoint. Write requests include Unraid's WebGUI CSRF token and are rejected when the token is missing or invalid.
+
 Weekday numbers in imported configuration follow Python conventions: Monday is 0, Sunday is 6. For an overnight interval such as 18:00–06:00, selected days refer to the day when the interval starts. A Monday-only interval therefore remains active through Tuesday at 06:00.
 
 ## Supported condition types
