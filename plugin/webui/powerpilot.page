@@ -2,10 +2,11 @@ Menu="Settings"
 Title="PowerPilot"
 Icon="microchip"
 Type="php"
+Markdown="false"
 ---
 <?php
-$enginePath = is_file(__DIR__ . '/src/engine.php') ? __DIR__ . '/src/engine.php' : __DIR__ . '/../src/engine.php';
-require_once $enginePath;
+$pluginRoot = rtrim((string)($docroot ?? '/usr/local/emhttp'), '/') . '/plugins/powerpilot';
+require_once $pluginRoot . '/src/engine.php';
 
 use function PowerPilot\loadConfig;
 use function PowerPilot\saveConfig;

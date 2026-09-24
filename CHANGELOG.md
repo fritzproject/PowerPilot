@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1 - 2026-09-24
+
+- Fixed the WebGUI engine path for Unraid's evaluated .page context and bypassed Markdown processing for the custom dashboard markup.
+
+
 ## 0.3.0 - 2026-09-24
 
 - Added optional TCP buffer tuning and selected NIC IRQ/XPS affinity with a read-only plan and a separate live confirmation.
