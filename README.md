@@ -16,11 +16,14 @@ PowerPilot is a native Unraid plugin that selects CPU governor and Energy Perfor
 
 ## Install on Unraid 7.2
 
-1. Download powerpilot.plg from the GitHub release assets.
-2. In Unraid, open Plugins > Install Plugin and paste the release URL for powerpilot.plg.
-3. Open Settings → PowerPilot. Confirm dry-run decisions before enabling live control.
+**Plugin file:** [powerpilot.plg](https://github.com/Fritzproject/PowerPilot/releases/latest/download/powerpilot.plg)
 
-The release workflow builds a Slackware .txz payload and a checksum-pinned .plg installer. The controller starts on array start and stops during shutdown. Tag a release as v0.3.0 to publish the network tuning feature release. A source template is kept in plugin/powerpilot.plg.in.
+1. In Unraid, open **Plugins > Install Plugin**.
+2. Paste this URL and select **Install**:
+   `https://github.com/Fritzproject/PowerPilot/releases/latest/download/powerpilot.plg`
+3. Open **Settings > PowerPilot**. Review the dry-run decisions before enabling CPU live mode. Network tuning has its own separate preview and live confirmation.
+
+The GitHub release includes the `.plg` installer and its compiled `.txz` package. The plugin starts with CPU dry-run enabled; TCP and NIC IRQ/XPS tuning are disabled by default.
 
 ## Data and migration
 
