@@ -1,0 +1,122 @@
+<?php
+$enginePath = is_file(__DIR__ . '/src/engine.php') ? __DIR__ . '/src/engine.php' : __DIR__ . '/../src/engine.php';
+require_once $enginePath;
+
+use function PowerPilot\loadConfig;
+use function PowerPilot\saveConfig;
+use function PowerPilot\loadState;
+use function PowerPilot\atomicJson;
+use function PowerPilot\history;
+use function PowerPilot\currentProfile;
+use function PowerPilot\scheduledProfile;
+use function PowerPilot\applyProfile;
+use function PowerPilot\validConfig;
+
+$var = $var ?? [];
+$isAjax = isset($_GET['ajax']) || isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false;
+$reply = static function (array $body, int $code = 200): void { http_response_code($code); header('Content-Type: application/json; charset=utf-8'); echo json_encode($body, JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE); exit; };
+if ($isAjax) {
+    try {
+        $cfg = loadConfig();
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+            $input = $_POST;
+            $posted = json_decode((string)($input['payload'] ?? '{}'), true);
+            if (!is_array($posted)) $reply(['error'=>'Invalid request payload'],400);
+            $input = array_merge($input,$posted);
+            $csrf = (string)($var['csrf_token'] ?? '');
+            if ($csrf === '' || !hash_equals($csrf, (string)($input['csrf_token'] ?? ''))) $reply(['error'=>'Invalid CSRF token'],403);
+            $action = (string)($input['action'] ?? ''); $state = loadState();
+            if ($action === 'save_config') {
+                $next = $input['config'] ?? null;
+                if (!is_array($next)) $reply(['error'=>'Missing config'],400);
+                $next['dry_run'] = (bool)($cfg['dry_run'] ?? true);
+                if (!validConfig($next,$error)) $reply(['error'=>$error],400);
+                saveConfig($next); $reply(['ok'=>true]);
+            }
+            if ($action === 'mode') {
+                if (!in_array($input['mode'] ?? '', ['dry_run','live'], true) || empty($input['confirmed'])) $reply(['error'=>'Explicit mode confirmation required'],400);
+                $enableLive = $input['mode'] === 'live';
+                $wasDry = !empty($cfg['dry_run']);
+                $cfg['dry_run'] = !$enableLive; saveConfig($cfg);
+                if ($enableLive && $wasDry) { $state['active_profile']=null; $state['last_switch']=0; $state['last_applied']=false; atomicJson(PowerPilot\STATE_FILE,$state); }
+                $reply(['ok'=>true,'dry_run'=>$cfg['dry_run']]);
+            }
+            if ($action === 'manual') {
+                $profile=$input['profile']??null;
+                if ($profile !== null && !isset($cfg['profiles'][$profile])) $reply(['error'=>'Unknown profile'],400);
+                if ($profile===null) $cfg['manual_override']=null;
+                else { $duration=max(0,min(604800,(int)($input['duration_sec']??0))); $cfg['manual_override']=['profile'=>$profile,'expires_at'=>$duration>0?time()+$duration:null]; }
+                saveConfig($cfg); $reply(['ok'=>true]);
+            }
+            if ($action === 'apply') {
+                $profile=(string)($input['profile']??''); if(!isset($cfg['profiles'][$profile]))$reply(['error'=>'Unknown profile'],400);
+                $changed=applyProfile($profile,'manual apply',$cfg,$state,true); atomicJson(PowerPilot\STATE_FILE,$state); $reply(['ok'=>true,'changed'=>$changed,'dry_run'=>$cfg['dry_run']]);
+            }
+            $reply(['error'=>'Unknown action'],400);
+        }
+        [$base,$baseReason]=scheduledProfile($cfg,new DateTimeImmutable('now'));
+        $state=loadState(); $reply(['version'=>PowerPilot\VERSION,'config'=>$cfg,'state'=>$state,'current'=>currentProfile(),'base_profile'=>$base,'base_reason'=>$baseReason,'history'=>history(100),'csrf_token'=>(string)($var['csrf_token']??'')]);
+    } catch (Throwable $e) { $reply(['error'=>$e->getMessage()],500); }
+}
+?>
+<style>
+.pp-wrap{max-width:1420px;margin:18px auto;padding:0 18px;color:#e8edf5}.pp-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.pp-card{background:#20242b;border:1px solid #373d47;border-radius:9px;padding:16px;margin:12px 0}.pp-card h3{margin:0 0 12px}.pp-kpi{font-size:24px;font-weight:700;margin-top:5px}.pp-muted{color:#aeb7c4}.pp-row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.pp-field{display:flex;flex-direction:column;gap:4px;margin:5px 0;min-width:115px;flex:1}.pp-field input,.pp-field select{background:#11151b;color:#f4f6fa;border:1px solid #454c58;border-radius:4px;padding:7px}.pp-btn{border:1px solid #596477;border-radius:5px;background:#303946;color:#fff;padding:7px 11px;cursor:pointer}.pp-btn:hover{background:#3a485b}.pp-danger{background:#612e34}.pp-table{width:100%;border-collapse:collapse}.pp-table th,.pp-table td{text-align:left;padding:8px;border-bottom:1px solid #393f49;vertical-align:top}.pp-condition{border:1px solid #3a424e;border-radius:6px;padding:10px;margin:8px 0}.pp-banner{padding:10px;border-radius:5px;background:#303946;margin:8px 0}.pp-ok{color:#6ee7a1}.pp-warn{color:#ffd166}.pp-err{color:#ff8585}.pp-days label{margin-right:7px;white-space:nowrap}.pp-small{font-size:12px}@media(max-width:900px){.pp-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:600px){.pp-grid{grid-template-columns:1fr}.pp-table{font-size:12px}}
+</style>
+<div class="pp-wrap">
+  <div class="pp-row"><div><h1>PowerPilot</h1><div class="pp-muted">Controllo profili CPU · Unraid 7.2</div></div><div style="margin-left:auto" class="pp-row"><button class="pp-btn" onclick="PP.refresh()">Aggiorna</button><button class="pp-btn" onclick="PP.apply('performance')">Performance ora</button><button class="pp-btn" onclick="PP.apply('power_super_save')">Super Save ora</button></div></div>
+  <div id="pp-message" class="pp-banner" style="display:none"></div>
+  <div class="pp-grid">
+    <div class="pp-card"><div class="pp-muted">Profilo selezionato</div><div id="pp-profile" class="pp-kpi">—</div><div id="pp-reason" class="pp-muted"></div></div>
+    <div class="pp-card"><div class="pp-muted">Base programmata</div><div id="pp-base" class="pp-kpi">—</div><div id="pp-base-reason" class="pp-muted"></div></div>
+    <div class="pp-card"><div class="pp-muted">CPU / memoria</div><div id="pp-cpu" class="pp-kpi">—</div><div id="pp-memory" class="pp-muted"></div></div>
+    <div class="pp-card"><div class="pp-muted">I/O / rete</div><div id="pp-io" class="pp-kpi">—</div><div id="pp-net" class="pp-muted"></div></div>
+  </div>
+  <div class="pp-card"><div class="pp-row"><b>Modalità</b><span id="pp-mode"></span><span id="pp-manual" class="pp-muted"></span><span class="pp-muted">Prossima valutazione: <span id="pp-next"></span></span><button id="pp-enabled-button" class="pp-btn" onclick="PP.toggleEnabled()">Pausa automazione</button><span class="pp-muted" style="margin-left:auto">Kernel: <span id="pp-current"></span></span></div><div id="pp-error" class="pp-err"></div></div>
+  <div class="pp-card"><h3>Impostazioni</h3><div class="pp-row"><div class="pp-field"><label>Profilo base</label><select id="pp-default-profile"></select></div><div class="pp-field"><label>Dwell minimo (secondi)</label><input id="pp-dwell" type="number" min="0" value="300"></div><div class="pp-field"><label>Intervallo controllo (secondi)</label><input id="pp-interval" type="number" min="2" value="10"></div><button class="pp-btn" onclick="PP.saveSettings()">Salva impostazioni</button></div></div>
+  <div class="pp-card"><h3>Schedule</h3><div class="pp-table-wrap"><table class="pp-table"><thead><tr><th>Giorni (lun=0)</th><th>Da</th><th>A</th><th>Profilo</th><th></th></tr></thead><tbody id="pp-schedules"></tbody></table></div>
+    <h4 id="pp-schedule-title">Aggiungi intervallo</h4><div class="pp-row"><div class="pp-field"><label>Giorni</label><div id="pp-days" class="pp-days"></div></div><div class="pp-field"><label>Inizio</label><input id="pp-start" type="time" value="18:00"></div><div class="pp-field"><label>Fine</label><input id="pp-end" type="time" value="06:00"></div><div class="pp-field"><label>Profilo</label><select id="pp-s-profile"></select></div><button class="pp-btn" onclick="PP.saveSchedule()">Salva schedule</button><button class="pp-btn" onclick="PP.cancelSchedule()">Annulla</button></div>
+  </div>
+  <div class="pp-card"><h3>Regole e condizioni</h3><table class="pp-table"><thead><tr><th>Priorità</th><th>Regola</th><th>Match</th><th>Condizioni</th><th>Profilo</th><th></th></tr></thead><tbody id="pp-rules"></tbody></table>
+    <h4 id="pp-rule-title">Aggiungi regola</h4><input id="pp-rule-id" type="hidden"><div class="pp-row"><div class="pp-field"><label>Nome</label><input id="pp-rule-name" maxlength="80"></div><div class="pp-field"><label>Priorità</label><input id="pp-rule-priority" type="number" value="100"></div><div class="pp-field"><label>Profilo</label><select id="pp-rule-profile"></select></div><div class="pp-field"><label>Hold (secondi)</label><input id="pp-rule-hold" type="number" min="0" value="10"></div><div class="pp-field"><label>Condizioni</label><select id="pp-rule-match"><option value="all">Tutte (AND)</option><option value="any">Una qualsiasi (OR)</option></select></div><label><input id="pp-rule-enabled" type="checkbox" checked> Attiva</label></div>
+    <div id="pp-conditions"></div><button class="pp-btn" onclick="PP.addCondition()">Aggiungi condizione</button> <button class="pp-btn" onclick="PP.saveRule()">Salva regola</button> <button class="pp-btn" onclick="PP.cancelRule()">Annulla</button>
+  </div>
+  <div class="pp-card"><h3>Controllo manuale e sicurezza</h3><div class="pp-row"><div class="pp-field"><label>Override manuale</label><select id="pp-manual-profile"><option value="">Nessuno</option></select></div><div class="pp-field"><label>Durata (minuti, 0 = senza scadenza)</label><input id="pp-manual-duration" type="number" min="0" value="60"></div><button class="pp-btn" onclick="PP.setManual()">Imposta override</button><button class="pp-btn" onclick="PP.clearManual()">Rimuovi override</button><button id="pp-live-button" class="pp-btn" onclick="PP.toggleMode()">Attiva controllo live…</button></div><p class="pp-muted pp-small">In dry-run le regole vengono valutate e registrate, ma il controller non modifica governor o EPP. Le modifiche live riguardano solo questi due parametri.</p></div>
+  <div class="pp-card"><h3>Storico decisioni</h3><table class="pp-table"><thead><tr><th>Ora</th><th>Profilo</th><th>Applicato</th><th>Motivo</th></tr></thead><tbody id="pp-history"></tbody></table></div>
+</div>
+<script>
+window.PowerPilotPage=(function(){
+  const endpoint=window.location.pathname; let data=null, settingsLoaded=false, editingSchedule=-1, editingRule=null;
+  const profiles=['performance','balanced','power_save','power_super_save'], labels={performance:'Performance',balanced:'Balanced',power_save:'Power Save',power_super_save:'Power Super Save'};
+  const types=['cpu_busy_gte','load1_gte','memory_used_gte','io_mbps_gte','network_mbps_gte','docker_running','docker_cpu_gte','process_running','process_cpu_gte','tcp_connections_gte','game_players_gte'];
+  const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  function say(message,error=false){const e=document.getElementById('pp-message');e.textContent=message;e.className='pp-banner '+(error?'pp-err':'pp-ok');e.style.display='block';setTimeout(()=>e.style.display='none',6000)}
+  async function request(action,payload={}){const body=new URLSearchParams({action,csrf_token:data?.csrf_token||'',payload:JSON.stringify(payload)});const r=await fetch(endpoint+'?ajax=1',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8','Accept':'application/json'},body,credentials:'same-origin'});const j=await r.json();if(!r.ok)throw new Error(j.error||'Richiesta non riuscita');return j}
+  async function refresh(){try{const r=await fetch(endpoint+'?ajax=1',{headers:{'Accept':'application/json'},credentials:'same-origin'});data=await r.json();if(!r.ok)throw new Error(data.error);render()}catch(e){say(e.message,true)}}
+  function profileOptions(selected){return profiles.map(p=>`<option value="${p}" ${p===selected?'selected':''}>${labels[p]}</option>`).join('')}
+  function render(){const s=data.state||{},m=s.metrics||{};document.getElementById('pp-profile').textContent=labels[s.active_profile]||'In attesa';document.getElementById('pp-reason').textContent=s.last_reason||'—';document.getElementById('pp-base').textContent=labels[data.base_profile]||data.base_profile;document.getElementById('pp-base-reason').textContent=data.base_reason;document.getElementById('pp-cpu').textContent=(m.cpu_busy||0).toFixed(1)+'%';document.getElementById('pp-memory').textContent='Memoria '+(m.memory_used||0).toFixed(1)+'% · load '+(m.load1||0).toFixed(2);document.getElementById('pp-io').textContent=(m.io_mbps||0).toFixed(1)+' MB/s';document.getElementById('pp-net').textContent=(m.network_mbps||0).toFixed(1)+' Mb/s';document.getElementById('pp-mode').innerHTML=data.config.dry_run?'<b class="pp-warn">DRY-RUN</b>':'<b class="pp-err">LIVE</b>';document.getElementById('pp-current').textContent=(data.current.governor||'?')+' / '+(data.current.epp||'?');document.getElementById('pp-manual').textContent=data.config.manual_override?'Override: '+(labels[data.config.manual_override.profile]||''):'Automatico';document.getElementById('pp-error').textContent=s.config_error||'';document.getElementById('pp-live-button').textContent=data.config.dry_run?'Attiva controllo live…':'Torna a dry-run';document.getElementById('pp-enabled-button').textContent=data.config.enabled?'Pausa automazione':'Riattiva automazione';document.getElementById('pp-next').textContent=s.next_reevaluation?new Date(s.next_reevaluation*1000).toLocaleTimeString():'—';
+    ['pp-s-profile','pp-rule-profile','pp-default-profile'].forEach(id=>{if(!document.querySelector('#'+id+' option'))document.getElementById(id).innerHTML=profileOptions(profiles[0])});if(!settingsLoaded){document.getElementById('pp-default-profile').value=data.config.default_profile;document.getElementById('pp-dwell').value=data.config.min_dwell_sec;document.getElementById('pp-interval').value=data.config.check_interval_sec;settingsLoaded=true;}const manualSelect=document.getElementById('pp-manual-profile'),manualSelected=manualSelect.value;manualSelect.innerHTML='<option value="">Nessuno</option>'+profileOptions(data.config.manual_override?.profile||'');if(manualSelected)manualSelect.value=manualSelected;
+    document.getElementById('pp-schedules').innerHTML=(data.config.schedule||[]).map((x,i)=>`<tr><td>${esc(x.days.join(', '))}</td><td>${esc(x.start)}</td><td>${esc(x.end)}</td><td>${esc(labels[x.profile]||x.profile)}</td><td><button class="pp-btn" onclick="PowerPilotPage.editSchedule(${i})">Modifica</button> <button class="pp-btn pp-danger" onclick="PowerPilotPage.deleteSchedule(${i})">Elimina</button></td></tr>`).join('');
+    document.getElementById('pp-rules').innerHTML=(data.config.rules||[]).slice().sort((a,b)=>b.priority-a.priority).map(r=>`<tr><td>${r.priority}</td><td>${esc(r.name||r.id)}${r.enabled?'':' <span class="pp-muted">(spenta)</span>'}</td><td>${esc(r.match||'all')}</td><td>${r.conditions.length} condizione/i</td><td>${esc(labels[r.profile]||r.profile)}</td><td><button class="pp-btn" onclick="PowerPilotPage.editRule('${esc(r.id)}')">Modifica</button> <button class="pp-btn pp-danger" onclick="PowerPilotPage.deleteRule('${esc(r.id)}')">Elimina</button></td></tr>`).join('');
+    document.getElementById('pp-history').innerHTML=(data.history||[]).map(e=>`<tr><td>${esc(e.ts)}</td><td>${esc(labels[e.profile]||e.profile)}</td><td>${e.applied?'Sì':e.dry_run?'Dry-run':'No'}</td><td>${esc(e.reason)}</td></tr>`).join('')}
+  function renderDays(selected=[]){document.getElementById('pp-days').innerHTML=['Lun','Mar','Mer','Gio','Ven','Sab','Dom'].map((n,i)=>`<label><input type="checkbox" value="${i}" ${selected.includes(i)?'checked':''}>${n}</label>`).join('')}
+  function saveSchedule(){const days=[...document.querySelectorAll('#pp-days input:checked')].map(x=>Number(x.value));if(!days.length)return say('Seleziona almeno un giorno.',true);const row={days,start:document.getElementById('pp-start').value,end:document.getElementById('pp-end').value,profile:document.getElementById('pp-s-profile').value};if(!row.start||!row.end)return say('Inserisci entrambi gli orari.',true);if(editingSchedule>=0)data.config.schedule[editingSchedule]=row;else data.config.schedule.push(row);persist('Schedule aggiornata.')}
+  function editSchedule(i){const x=data.config.schedule[i];editingSchedule=i;document.getElementById('pp-start').value=x.start;document.getElementById('pp-end').value=x.end;document.getElementById('pp-s-profile').value=x.profile;renderDays(x.days);document.getElementById('pp-schedule-title').textContent='Modifica intervallo'}
+  function cancelSchedule(){editingSchedule=-1;document.getElementById('pp-start').value='18:00';document.getElementById('pp-end').value='06:00';renderDays([0,1,2,3,4,5,6]);document.getElementById('pp-schedule-title').textContent='Aggiungi intervallo'}
+  function deleteSchedule(i){if(!confirm('Eliminare questo intervallo?'))return;data.config.schedule.splice(i,1);persist('Schedule eliminata.')}
+  function addCondition(value={}){const box=document.createElement('div');box.className='pp-condition';box.innerHTML=`<div class="pp-row"><div class="pp-field"><label>Tipo</label><select class="ct">${types.map(t=>`<option ${t===value.type?'selected':''}>${t}</option>`).join('')}</select></div><div class="pp-field"><label>Container / processo (regex)</label><input class="pattern" value="${esc(value.container||value.process||'')}"></div><div class="pp-field"><label>Valore / giocatori</label><input class="value" type="number" min="0" step="any" value="${esc(value.value??1)}"></div><div class="pp-field"><label>Porta</label><input class="port" type="number" min="1" max="65535" value="${esc(value.port||value.query?.port||'')}"></div></div><div class="pp-row"><div class="pp-field"><label>Protocollo gioco</label><select class="protocol"><option value="steam_a2s" ${value.query?.protocol==='steam_a2s'?'selected':''}>Steam A2S</option><option value="minecraft_rcon" ${value.query?.protocol==='minecraft_rcon'?'selected':''}>Minecraft RCON</option></select></div><div class="pp-field"><label>Host query gioco</label><input class="host" value="${esc(value.query?.host||'')}"></div><div class="pp-field"><label>Password RCON</label><input class="password" type="password" value="${esc(value.query?.password||'')}"></div><button class="pp-btn pp-danger" type="button">Rimuovi</button></div>`;box.querySelector('button').onclick=()=>box.remove();document.getElementById('pp-conditions').appendChild(box)}
+  function readConditions(){return [...document.querySelectorAll('.pp-condition')].map(box=>{const type=box.querySelector('.ct').value,pattern=box.querySelector('.pattern').value,value=Number(box.querySelector('.value').value||0),port=Number(box.querySelector('.port').value||0);if(type.startsWith('docker_'))return type==='docker_running'?{type,container:pattern}:{type,container:pattern,value};if(type.startsWith('process_'))return type==='process_running'?{type,process:pattern}:{type,process:pattern,value};if(type==='tcp_connections_gte')return{type,port,value};if(type==='game_players_gte')return{type,value,query:{protocol:box.querySelector('.protocol').value,host:box.querySelector('.host').value,port,password:box.querySelector('.password').value}};return{type,value}})}
+  function saveRule(){const name=document.getElementById('pp-rule-name').value.trim(),conditions=readConditions();if(!name||!conditions.length)return say('Inserisci nome e almeno una condizione.',true);let id=document.getElementById('pp-rule-id').value||name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');const row={id,name,enabled:document.getElementById('pp-rule-enabled').checked,priority:Number(document.getElementById('pp-rule-priority').value||0),profile:document.getElementById('pp-rule-profile').value,hold_sec:Number(document.getElementById('pp-rule-hold').value||0),match:document.getElementById('pp-rule-match').value,conditions};if(editingRule!==null){const i=data.config.rules.findIndex(r=>r.id===editingRule);if(i>=0)data.config.rules[i]=row;}else data.config.rules.push(row);persist('Regola salvata.')}
+  function editRule(id){const r=data.config.rules.find(x=>x.id===id);if(!r)return;editingRule=id;document.getElementById('pp-rule-id').value=id;document.getElementById('pp-rule-name').value=r.name;document.getElementById('pp-rule-priority').value=r.priority;document.getElementById('pp-rule-profile').value=r.profile;document.getElementById('pp-rule-hold').value=r.hold_sec;document.getElementById('pp-rule-match').value=r.match||'all';document.getElementById('pp-rule-enabled').checked=r.enabled;document.getElementById('pp-conditions').innerHTML='';r.conditions.forEach(addCondition);document.getElementById('pp-rule-title').textContent='Modifica regola'}
+  function cancelRule(){editingRule=null;document.getElementById('pp-rule-id').value='';document.getElementById('pp-rule-name').value='';document.getElementById('pp-rule-priority').value=100;document.getElementById('pp-rule-hold').value=10;document.getElementById('pp-rule-match').value='all';document.getElementById('pp-rule-enabled').checked=true;document.getElementById('pp-conditions').innerHTML='';addCondition();document.getElementById('pp-rule-title').textContent='Aggiungi regola'}
+  function deleteRule(id){if(!confirm('Eliminare la regola?'))return;data.config.rules=data.config.rules.filter(r=>r.id!==id);persist('Regola eliminata.')}
+  async function persist(message){try{await request('save_config',{config:data.config});cancelSchedule();cancelRule();await refresh();say(message)}catch(e){say(e.message,true)}}
+  async function saveSettings(){data.config.default_profile=document.getElementById('pp-default-profile').value;data.config.min_dwell_sec=Number(document.getElementById('pp-dwell').value||0);data.config.check_interval_sec=Math.max(2,Number(document.getElementById('pp-interval').value||10));await persist('Impostazioni salvate.')}async function toggleEnabled(){data.config.enabled=!data.config.enabled;await persist(data.config.enabled?'Automazione riattivata.':'Automazione in pausa.')}
+  async function apply(profile){try{await request('apply',{profile});await refresh();say(data.config.dry_run?'Profilo simulato in dry-run.':'Profilo richiesto applicato.')}catch(e){say(e.message,true)}}
+  async function setManual(){const profile=document.getElementById('pp-manual-profile').value;if(!profile)return clearManual();const mins=Number(document.getElementById('pp-manual-duration').value||0);try{await request('manual',{profile,duration_sec:mins*60});await refresh();say('Override manuale impostato.')}catch(e){say(e.message,true)}}
+  async function clearManual(){try{await request('manual',{profile:null});await refresh();say('Override rimosso.')}catch(e){say(e.message,true)}}
+  async function toggleMode(){const live=data.config.dry_run;if(live&&!confirm('Tornare a dry-run?'))return;if(!live&&!confirm('ATTENZIONE: il controller modificherà governor ed EPP del server. Continuare?'))return;try{await request('mode',{mode:live?'dry_run':'live',confirmed:true});await refresh();say(live?'Dry-run attivato.':'Controllo live attivato.')}catch(e){say(e.message,true)}}
+  renderDays([0,1,2,3,4,5,6]);cancelRule();refresh();setInterval(refresh,5000);
+  return{refresh,saveSchedule,editSchedule,cancelSchedule,deleteSchedule,addCondition,saveRule,editRule,cancelRule,deleteRule,saveSettings,toggleEnabled,apply,setManual,clearManual,toggleMode};
+})();
+window.PP=window.PowerPilotPage;
+</script>

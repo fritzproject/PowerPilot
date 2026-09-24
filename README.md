@@ -1,65 +1,44 @@
-# Dynamic Power Manager for Unraid
+# PowerPilot
 
-GUI + controller that keeps an Unraid host always on while dynamically selecting a CPU power profile based on schedule and workload.
+PowerPilot is a native Unraid plugin that selects CPU governor and Energy Performance Preference (EPP) from schedules and workload rules. It keeps the host online; it does not suspend or shut down Unraid.
 
-## What it does
+## Features
 
-- Schedule profiles by time and weekday.
-- Four logical profiles: Performance, Balanced, Power Save, Power Super Save.
-- Generic rules for Docker containers, Docker CPU, host CPU, load, memory, disk I/O, network throughput, process presence/CPU and TCP connections.
-- Game-server player detection via Steam A2S (where supported) and Minecraft RCON.
-- Priority-based overrides.
-- Hold time and global minimum dwell to avoid profile flapping.
-- Manual override with optional expiry.
-- Dry-run mode and an event history page.
+- Performance, Balanced, Power Save and Power Super Save profiles.
+- Weekday schedules, including intervals that cross midnight.
+- Priority overrides with per-rule hold time and global minimum dwell.
+- Rules for host CPU, load, memory, disk I/O, network, Docker containers, processes, TCP ports and game player counts.
+- Steam A2S and Minecraft RCON queries.
+- Manual profile override, event history, current metrics and a plain-language explanation of the winning decision.
+- Dry-run is enabled on first install. Live mode requires a separate confirmation in the plugin page.
 
-For schedules that cross midnight, the selected weekday is the day the interval
-starts (for example, Monday 18:00–06:00 continues into Tuesday morning).
+## Install on Unraid 7.2
 
-## Important for this first release
+1. Download powerpilot.plg from the GitHub release assets.
+2. In Unraid, open Plugins → Install Plugin and paste the release URL for powerpilot.plg.
+3. Open Settings → PowerPilot. Confirm dry-run decisions before enabling live control.
 
-The controller does **not** manage server sleep/shutdown. It is designed for an Unraid host that must remain online.
+The release workflow builds a Slackware .txz payload and a checksum-pinned .plg installer. Tag a release as v0.2.0 to publish the first package. A source template is kept in plugin/powerpilot.plg.in.
 
-The first release changes only CPU governor + EPP. It intentionally does not toggle SATA LPM, PCI ASPM, NVMe or HBA power states dynamically. Those are better treated as a separate, compatibility-sensitive layer on a server with multiple SAS disks and an HBA.
+## Data and migration
 
-The four profile mappings are:
+Configuration is stored at /boot/config/plugins/powerpilot/config.json. Event history and controller state are stored under /mnt/user/appdata/powerpilot/ to avoid frequent writes to the Unraid flash device.
 
-- Performance: governor=performance, EPP=performance
-- Balanced: governor=powersave, EPP=balance_performance
-- Power Save: governor=powersave, EPP=balance_power
-- Power Super Save: governor=powersave, EPP=power
+On first start, the plugin imports /mnt/user/appdata/dynamic-power-manager/config.json when available. The imported configuration is forced to dry-run. Existing SQLite event history is not imported.
 
-If Autotweak is installed, its own GUI can remain present, but do not let two independent tools fight over the same settings. Autotweak explicitly warns that it is not compatible with other plugins that alter the same settings.
+## CPU profile mappings
 
-## PowerPilot + Codex
+| Profile | Governor | EPP |
+| --- | --- | --- |
+| Performance | performance | performance |
+| Balanced | powersave | balance_performance |
+| Power Save | powersave | balance_power |
+| Power Super Save | powersave | power |
 
-This repository includes `AGENTS.md` with the project context, design constraints, safety boundaries, and development workflow. Open the repository folder in VS Code and let the Codex extension work from that folder.
+Only CPU governor and EPP are modified. Storage link power management, PCIe ASPM, NVMe, HBA state, disk spin-down, host sleep and shutdown remain out of scope. Coordinate CPU ownership with Autotweak to prevent two controllers from changing the same settings.
 
-## Unraid deployment
+## Development
 
-This container needs privileged host access because it writes CPU sysfs values and reads host processes/metrics. It also uses the Docker socket to inspect containers.
+Run engine checks with php plugin/tests/engine_test.php. Run syntax checks with php -l plugin/src/engine.php and php -l plugin/webui/powerpilot.page. Build a release payload with bash plugin/build-release.sh 0.2.0 on Linux with PHP, tar/xz and core utilities installed.
 
-Recommended volumes:
-
-- `/mnt/user/appdata/dynamic-power-manager:/data`
-- `/sys:/sys:rw`
-- `/var/run/docker.sock:/var/run/docker.sock`
-
-Recommended settings:
-
-- `privileged=true`
-- `pid=host`
-- Port `8787`
-- Time zone `Europe/Rome`
-
-Start it in dry-run first. Open `http://UNRAID-IP:8787` and verify which rule would win before disabling dry-run.
-
-## Example generic game setup
-
-You do not have to hard-code Minecraft, Valheim, SCUM or Arma into the application. The rule engine can target a container name/regex, a process, a TCP port, or a game-query endpoint. For games exposing Steam A2S, use `steam_a2s`; for Minecraft use RCON.
-
-For games without a usable player query, use a container-running rule or a CPU/process/port rule. That makes the engine usable for new games without requiring a new Docker image.
-
-## Security note
-
-Giving a container access to `/var/run/docker.sock` is highly privileged. Keep the web UI on your trusted LAN or behind your existing reverse proxy/authentication.
+Live installation and CPU writes must be validated on a disposable Unraid 7.2 system before enabling them on a production host.
