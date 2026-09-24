@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<PLUGIN name="powerpilot" author="PowerPilot" version="@VERSION@" launch="Settings/PowerPilot" pluginURL="https://github.com/Fritzproject/PowerPilot/releases/latest/download/powerpilot.plg" min="7.2.0" support="https://github.com/Fritzproject/PowerPilot/issues">
+<PLUGIN name="powerpilot" author="PowerPilot" version="@VERSION@" launch="Settings/powerpilot" pluginURL="https://github.com/Fritzproject/PowerPilot/releases/latest/download/powerpilot.plg" min="7.2.0" support="https://github.com/Fritzproject/PowerPilot/issues">
   <CHANGES>
     ### @VERSION@
     - Native Unraid plugin with dry-run default.

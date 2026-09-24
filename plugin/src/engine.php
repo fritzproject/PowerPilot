@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 namespace PowerPilot;
 
-const VERSION = '0.3.1';
+const VERSION = '0.3.2';
 const CONFIG_DIR = '/boot/config/plugins/powerpilot';
 const CONFIG_FILE = CONFIG_DIR . '/config.json';
 const DATA_DIR = '/mnt/user/appdata/powerpilot';

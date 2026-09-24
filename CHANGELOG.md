@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2 - 2026-09-24
+
+- Fixed the WebGUI launch path to match the case-sensitive powerpilot.page filename.
+
+
 ## 0.3.1 - 2026-09-24
 
 - Fixed the WebGUI engine path for Unraid's evaluated .page context and bypassed Markdown processing for the custom dashboard markup.
