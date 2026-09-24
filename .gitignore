@@ -1,0 +1,20 @@
+# Local runtime state and credentials
+data/
+*.sqlite
+*.sqlite3
+*.db
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Build and release artifacts
+*.zip
+dist/
+build/

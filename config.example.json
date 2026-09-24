@@ -1,0 +1,32 @@
+{
+  "enabled": true,
+  "dry_run": true,
+  "engine": "native",
+  "check_interval_sec": 10,
+  "min_dwell_sec": 300,
+  "default_profile": "balanced",
+  "manual_override": null,
+  "schedule": [
+    {"days":[0,1,2,3,4,5,6],"start":"06:00","end":"18:00","profile":"performance"},
+    {"days":[0,1,2,3,4,5,6],"start":"18:00","end":"06:00","profile":"power_super_save"}
+  ],
+  "profiles": {
+    "performance": {"governor":"performance","epp":"performance"},
+    "balanced": {"governor":"powersave","epp":"balance_performance"},
+    "power_save": {"governor":"powersave","epp":"balance_power"},
+    "power_super_save": {"governor":"powersave","epp":"power"}
+  },
+  "rules": [
+    {"id":"minecraft-players","name":"Minecraft players","enabled":true,"priority":150,"profile":"performance","hold_sec":10,"match":"all","conditions":[{"type":"game_players_gte","value":1,"query":{"protocol":"minecraft_rcon","host":"192.168.1.50","port":25575,"password":"CHANGE_ME"}}]},
+    {"id":"arma-players","name":"Arma / Steam query","enabled":true,"priority":150,"profile":"performance","hold_sec":10,"match":"all","conditions":[{"type":"game_players_gte","value":1,"query":{"protocol":"steam_a2s","host":"192.168.1.51","port":2303}}]},
+    {"id":"valheim-players","name":"Valheim / Steam query","enabled":true,"priority":150,"profile":"performance","hold_sec":10,"match":"all","conditions":[{"type":"game_players_gte","value":1,"query":{"protocol":"steam_a2s","host":"192.168.1.52","port":2456}}]},
+    {"id":"scum-players","name":"SCUM / Steam query","enabled":true,"priority":150,"profile":"performance","hold_sec":10,"match":"all","conditions":[{"type":"game_players_gte","value":1,"query":{"protocol":"steam_a2s","host":"192.168.1.53","port":7777}}]},
+    {"id":"game-containers","name":"Game containers","enabled":true,"priority":100,"profile":"performance","hold_sec":15,"match":"any","conditions":[{"type":"docker_running","container":"minecraft"},{"type":"docker_running","container":"valheim"},{"type":"docker_running","container":"scum"},{"type":"docker_running","container":"arma"}]},
+    {"id":"wolf-shadps4","name":"Wolf / ShadPS4","enabled":true,"priority":110,"profile":"performance","hold_sec":10,"match":"any","conditions":[{"type":"docker_cpu_gte","container":"wolf","value":5},{"type":"docker_cpu_gte","container":"shadps4","value":5}]},
+    {"id":"jellyfin-plex","name":"Jellyfin / Plex","enabled":true,"priority":120,"profile":"performance","hold_sec":10,"match":"any","conditions":[{"type":"docker_cpu_gte","container":"jellyfin","value":8},{"type":"docker_cpu_gte","container":"plex","value":8}]},
+    {"id":"high-cpu","name":"High CPU","enabled":true,"priority":90,"profile":"performance","hold_sec":30,"match":"all","conditions":[{"type":"cpu_busy_gte","value":45}]},
+    {"id":"heavy-io","name":"Heavy disk I/O","enabled":true,"priority":80,"profile":"balanced","hold_sec":30,"match":"all","conditions":[{"type":"io_mbps_gte","value":200}]},
+    {"id":"network","name":"High network","enabled":false,"priority":70,"profile":"balanced","hold_sec":30,"match":"all","conditions":[{"type":"network_mbps_gte","value":500}]},
+    {"id":"tcp-players","name":"Connections on game port","enabled":false,"priority":130,"profile":"performance","hold_sec":10,"match":"all","conditions":[{"type":"tcp_connections_gte","port":2456,"value":1}]}
+  ]
+}
