@@ -1,6 +1,6 @@
 # Rule reference
 
-Manage schedules and rules in the PowerPilot page in the Unraid WebGUI. Conditions can be combined with all (AND) or any (OR). A higher numeric priority wins when multiple rules match. Each rule has a hold time before activation; the global minimum dwell prevents rapid profile switching.
+Manage schedules and rules in the PowerPilot page in the Unraid WebGUI. Select a readable condition from the rule editor; PowerPilot displays only the fields needed for that condition and explains its units. Conditions can be combined with all (AND) or any (OR). A higher numeric priority wins when multiple rules match. Each rule has a hold time before activation; the global minimum dwell prevents rapid profile switching.
 
 The dashboard fetches its state from the plugin's dedicated PHP endpoint. Write requests include Unraid's WebGUI CSRF token and are rejected when the token is missing or invalid.
 

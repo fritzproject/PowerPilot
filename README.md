@@ -8,6 +8,7 @@ PowerPilot is a native Unraid plugin that selects CPU governor and Energy Perfor
 - Weekday schedules, including intervals that cross midnight.
 - Priority overrides with per-rule hold time and global minimum dwell.
 - Rules for host CPU, load, memory, disk I/O, network, Docker containers, processes, TCP ports and game player counts.
+- The rule editor uses readable condition names, shows only relevant inputs and explains each threshold before saving.
 - Steam A2S and Minecraft RCON queries.
 - Manual profile override, event history, current metrics and a plain-language explanation of the winning decision.
 - CPU dry-run is enabled on first install. CPU live mode and network live mode require separate confirmations.

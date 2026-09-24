@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0 - 2026-09-24
+
+- Replaced free-text condition types with a clear dropdown of supported host, Docker, process, TCP and game-query signals.
+- Show only the fields needed by each condition and explain thresholds and units in the rule editor.
+- Validate required container/process names, TCP and game-query ports, and Minecraft RCON credentials before saving.
+- Start the controller after the plugin package has been installed or updated.
+
 ## 0.3.3 - 2026-09-24
 
 - Fixed dashboard data requests by moving AJAX handling to a dedicated PHP endpoint installed with the plugin.

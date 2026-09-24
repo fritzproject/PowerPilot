@@ -7,6 +7,10 @@ Markdown="false"
 <style>
 .pp-wrap{max-width:1420px;margin:18px auto;padding:0 18px;color:#e8edf5}.pp-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.pp-card{background:#20242b;border:1px solid #373d47;border-radius:9px;padding:16px;margin:12px 0}.pp-card h3{margin:0 0 12px}.pp-kpi{font-size:24px;font-weight:700;margin-top:5px}.pp-muted{color:#aeb7c4}.pp-row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.pp-field{display:flex;flex-direction:column;gap:4px;margin:5px 0;min-width:115px;flex:1}.pp-field input,.pp-field select{background:#11151b;color:#f4f6fa;border:1px solid #454c58;border-radius:4px;padding:7px}.pp-btn{border:1px solid #596477;border-radius:5px;background:#303946;color:#fff;padding:7px 11px;cursor:pointer}.pp-btn:hover{background:#3a485b}.pp-danger{background:#612e34}.pp-table{width:100%;border-collapse:collapse}.pp-table th,.pp-table td{text-align:left;padding:8px;border-bottom:1px solid #393f49;vertical-align:top}.pp-nic-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px}.pp-nic{border:1px solid #3a424e;border-radius:6px;padding:9px}.pp-condition{border:1px solid #3a424e;border-radius:6px;padding:10px;margin:8px 0}.pp-banner{padding:10px;border-radius:5px;background:#303946;margin:8px 0}.pp-ok{color:#6ee7a1}.pp-warn{color:#ffd166}.pp-err{color:#ff8585}.pp-days label{margin-right:7px;white-space:nowrap}.pp-small{font-size:12px}@media(max-width:900px){.pp-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:600px){.pp-grid{grid-template-columns:1fr}.pp-table{font-size:12px}}
 </style>
+<style>
+.pp-condition-hint{color:#aeb7c4;font-size:12px;margin:-3px 0 8px}
+.pp-hidden{display:none!important}
+</style>
 <div class="pp-wrap">
   <div class="pp-row"><div><h1>PowerPilot</h1><div class="pp-muted">Controllo profili CPU · Unraid 7.2</div></div><div style="margin-left:auto" class="pp-row"><button class="pp-btn" onclick="PP.refresh()">Aggiorna</button><button class="pp-btn" onclick="PP.apply('performance')">Performance ora</button><button class="pp-btn" onclick="PP.apply('power_super_save')">Super Save ora</button></div></div>
   <div id="pp-message" class="pp-banner" style="display:none"></div>
@@ -52,11 +56,24 @@ Markdown="false"
 window.PowerPilotPage=(function(){
   const endpoint='/plugins/powerpilot/api.php'; let data=null, settingsLoaded=false, networkInputsInitialized=false, editingSchedule=-1, editingRule=null;
   const profiles=['performance','balanced','power_save','power_super_save'], labels={performance:'Performance',balanced:'Balanced',power_save:'Power Save',power_super_save:'Power Super Save'};
-  const types=['cpu_busy_gte','load1_gte','memory_used_gte','io_mbps_gte','network_mbps_gte','docker_running','docker_cpu_gte','process_running','process_cpu_gte','tcp_connections_gte','game_players_gte'];
+  const conditionTypes={
+    cpu_busy_gte:'CPU host sopra soglia',
+    load1_gte:'Carico host (load average)',
+    memory_used_gte:'Memoria usata sopra soglia',
+    io_mbps_gte:'Attività disco sopra soglia',
+    network_mbps_gte:'Traffico di rete sopra soglia',
+    docker_running:'Container Docker in esecuzione',
+    docker_cpu_gte:'CPU container Docker sopra soglia',
+    process_running:'Processo presente',
+    process_cpu_gte:'CPU processo sopra soglia',
+    tcp_connections_gte:'Connessioni TCP su una porta',
+    game_players_gte:'Giocatori online (query server)'
+  };
+  const types=Object.keys(conditionTypes);
   const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   function say(message,error=false){const e=document.getElementById('pp-message');e.textContent=message;e.className='pp-banner '+(error?'pp-err':'pp-ok');e.style.display='block';setTimeout(()=>e.style.display='none',6000)}
-  async function request(action,payload={}){const body=new URLSearchParams({action,csrf_token:data?.csrf_token||'',payload:JSON.stringify(payload)});const r=await fetch(endpoint+'?ajax=1',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8','Accept':'application/json'},body,credentials:'same-origin'});const j=await r.json();if(!r.ok)throw new Error(j.error||'Richiesta non riuscita');return j}
-  async function refresh(){try{const r=await fetch(endpoint+'?ajax=1',{headers:{'Accept':'application/json'},credentials:'same-origin'});data=await r.json();if(!r.ok)throw new Error(data.error);render();renderNetwork()}catch(e){say(e.message,true)}}
+  async function request(action,payload={}){const body=new URLSearchParams({action,csrf_token:data?.csrf_token||'',payload:JSON.stringify(payload)});const r=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8','Accept':'application/json'},body,credentials:'same-origin'});const j=await r.json();if(!r.ok)throw new Error(j.error||'Richiesta non riuscita');return j}
+  async function refresh(){try{const r=await fetch(endpoint,{headers:{'Accept':'application/json'},credentials:'same-origin'});data=await r.json();if(!r.ok)throw new Error(data.error);render();renderNetwork()}catch(e){say(e.message,true)}}
   function profileOptions(selected){return profiles.map(p=>`<option value="${p}" ${p===selected?'selected':''}>${labels[p]}</option>`).join('')}
   function render(){const s=data.state||{},m=s.metrics||{};document.getElementById('pp-profile').textContent=labels[s.active_profile]||'In attesa';document.getElementById('pp-reason').textContent=s.last_reason||'—';document.getElementById('pp-base').textContent=labels[data.base_profile]||data.base_profile;document.getElementById('pp-base-reason').textContent=data.base_reason;document.getElementById('pp-cpu').textContent=(m.cpu_busy||0).toFixed(1)+'%';document.getElementById('pp-memory').textContent='Memoria '+(m.memory_used||0).toFixed(1)+'% · load '+(m.load1||0).toFixed(2);document.getElementById('pp-io').textContent=(m.io_mbps||0).toFixed(1)+' MB/s';document.getElementById('pp-net').textContent=(m.network_mbps||0).toFixed(1)+' Mb/s';document.getElementById('pp-mode').innerHTML=data.config.dry_run?'<b class="pp-warn">DRY-RUN</b>':'<b class="pp-err">LIVE</b>';document.getElementById('pp-current').textContent=(data.current.governor||'?')+' / '+(data.current.epp||'?');document.getElementById('pp-manual').textContent=data.config.manual_override?'Override: '+(labels[data.config.manual_override.profile]||''):'Automatico';document.getElementById('pp-error').textContent=s.config_error||'';document.getElementById('pp-live-button').textContent=data.config.dry_run?'Attiva controllo live…':'Torna a dry-run';document.getElementById('pp-enabled-button').textContent=data.config.enabled?'Pausa automazione':'Riattiva automazione';document.getElementById('pp-next').textContent=s.next_reevaluation?new Date(s.next_reevaluation*1000).toLocaleTimeString():'—';
     ['pp-s-profile','pp-rule-profile','pp-default-profile'].forEach(id=>{if(!document.querySelector('#'+id+' option'))document.getElementById(id).innerHTML=profileOptions(profiles[0])});if(!settingsLoaded){document.getElementById('pp-default-profile').value=data.config.default_profile;document.getElementById('pp-dwell').value=data.config.min_dwell_sec;document.getElementById('pp-interval').value=data.config.check_interval_sec;settingsLoaded=true;}const manualSelect=document.getElementById('pp-manual-profile'),manualSelected=manualSelect.value;manualSelect.innerHTML='<option value="">Nessuno</option>'+profileOptions(data.config.manual_override?.profile||'');if(manualSelected)manualSelect.value=manualSelected;
@@ -120,9 +137,141 @@ window.PowerPilotPage=(function(){
   function editSchedule(i){const x=data.config.schedule[i];editingSchedule=i;document.getElementById('pp-start').value=x.start;document.getElementById('pp-end').value=x.end;document.getElementById('pp-s-profile').value=x.profile;renderDays(x.days);document.getElementById('pp-schedule-title').textContent='Modifica intervallo'}
   function cancelSchedule(){editingSchedule=-1;document.getElementById('pp-start').value='18:00';document.getElementById('pp-end').value='06:00';renderDays([0,1,2,3,4,5,6]);document.getElementById('pp-schedule-title').textContent='Aggiungi intervallo'}
   function deleteSchedule(i){if(!confirm('Eliminare questo intervallo?'))return;data.config.schedule.splice(i,1);persist('Schedule eliminata.')}
-  function addCondition(value={}){const box=document.createElement('div');box.className='pp-condition';box.innerHTML=`<div class="pp-row"><div class="pp-field"><label>Tipo</label><select class="ct">${types.map(t=>`<option ${t===value.type?'selected':''}>${t}</option>`).join('')}</select></div><div class="pp-field"><label>Container / processo (regex)</label><input class="pattern" value="${esc(value.container||value.process||'')}"></div><div class="pp-field"><label>Valore / giocatori</label><input class="value" type="number" min="0" step="any" value="${esc(value.value??1)}"></div><div class="pp-field"><label>Porta</label><input class="port" type="number" min="1" max="65535" value="${esc(value.port||value.query?.port||'')}"></div></div><div class="pp-row"><div class="pp-field"><label>Protocollo gioco</label><select class="protocol"><option value="steam_a2s" ${value.query?.protocol==='steam_a2s'?'selected':''}>Steam A2S</option><option value="minecraft_rcon" ${value.query?.protocol==='minecraft_rcon'?'selected':''}>Minecraft RCON</option></select></div><div class="pp-field"><label>Host query gioco</label><input class="host" value="${esc(value.query?.host||'')}"></div><div class="pp-field"><label>Password RCON</label><input class="password" type="password" value="${esc(value.query?.password||'')}"></div><button class="pp-btn pp-danger" type="button">Rimuovi</button></div>`;box.querySelector('button').onclick=()=>box.remove();document.getElementById('pp-conditions').appendChild(box)}
-  function readConditions(){return [...document.querySelectorAll('.pp-condition')].map(box=>{const type=box.querySelector('.ct').value,pattern=box.querySelector('.pattern').value,value=Number(box.querySelector('.value').value||0),port=Number(box.querySelector('.port').value||0);if(type.startsWith('docker_'))return type==='docker_running'?{type,container:pattern}:{type,container:pattern,value};if(type.startsWith('process_'))return type==='process_running'?{type,process:pattern}:{type,process:pattern,value};if(type==='tcp_connections_gte')return{type,port,value};if(type==='game_players_gte')return{type,value,query:{protocol:box.querySelector('.protocol').value,host:box.querySelector('.host').value,port,password:box.querySelector('.password').value}};return{type,value}})}
-  function saveRule(){const name=document.getElementById('pp-rule-name').value.trim(),conditions=readConditions();if(!name||!conditions.length)return say('Inserisci nome e almeno una condizione.',true);let id=document.getElementById('pp-rule-id').value||name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');const row={id,name,enabled:document.getElementById('pp-rule-enabled').checked,priority:Number(document.getElementById('pp-rule-priority').value||0),profile:document.getElementById('pp-rule-profile').value,hold_sec:Number(document.getElementById('pp-rule-hold').value||0),match:document.getElementById('pp-rule-match').value,conditions};if(editingRule!==null){const i=data.config.rules.findIndex(r=>r.id===editingRule);if(i>=0)data.config.rules[i]=row;}else data.config.rules.push(row);persist('Regola salvata.')}
+  function updateConditionFields(box){
+    const type=box.querySelector('.ct').value;
+    const isDocker=type==='docker_running'||type==='docker_cpu_gte';
+    const isProcess=type==='process_running'||type==='process_cpu_gte';
+    const isPresence=type==='docker_running'||type==='process_running';
+    const isTcp=type==='tcp_connections_gte';
+    const isGame=type==='game_players_gte';
+    const isCpu=type==='cpu_busy_gte'||type==='docker_cpu_gte'||type==='process_cpu_gte';
+    const isMemory=type==='memory_used_gte';
+    const isLoad=type==='load1_gte';
+    const isDisk=type==='io_mbps_gte';
+    const isNetwork=type==='network_mbps_gte';
+    const protocol=box.querySelector('.protocol').value;
+    const show=(selector,visible)=>box.querySelector(selector).classList.toggle('pp-hidden',!visible);
+
+    show('.pattern-field',isDocker||isProcess);
+    show('.value-field',!isPresence);
+    show('.port-field',isTcp||isGame);
+    show('.protocol-field',isGame);
+    show('.host-field',isGame);
+    show('.password-field',isGame&&protocol==='minecraft_rcon');
+
+    box.querySelector('.pattern-label').textContent=isDocker
+      ?'Nome container (puoi usare una regex)'
+      :'Nome processo (puoi usare una regex)';
+    box.querySelector('.pattern').placeholder=isDocker?'Es. plex oppure plex.*':'Es. java oppure minecraft.*';
+
+    let valueLabel='Soglia';
+    let hint='La condizione si attiva quando il valore raggiunge o supera la soglia.';
+    if(isCpu){valueLabel='Utilizzo CPU (%)';hint='Utilizzo CPU oltre il quale attivare la regola.';}
+    if(isMemory){valueLabel='Memoria utilizzata (%)';hint='Memoria usata oltre la quale attivare la regola.';}
+    if(isLoad){valueLabel='Load average a 1 minuto';hint='Carico host oltre il quale attivare la regola.';}
+    if(isDisk){valueLabel='Lettura e scrittura disco (MB/s)';hint='Attività complessiva dei dischi oltre la quale attivare la regola.';}
+    if(isNetwork){valueLabel='Traffico rete (Mb/s)';hint='Traffico complessivo host oltre il quale attivare la regola.';}
+    if(isTcp){valueLabel='Connessioni minime';hint='Numero minimo di connessioni TCP attive sulla porta.';}
+    if(isGame){valueLabel='Giocatori minimi';hint='Numero minimo di giocatori restituito dalla query.';}
+    if(isDocker){hint=isPresence?'Si attiva quando il container corrispondente è in esecuzione.':'Si attiva quando il container supera la soglia CPU.';}
+    if(isProcess){hint=isPresence?'Si attiva quando il processo corrispondente è presente.':'Si attiva quando il processo supera la soglia CPU.';}
+    if(isGame&&protocol==='minecraft_rcon')hint+=' Inserisci la password RCON del server.';
+
+    box.querySelector('.value-label').textContent=valueLabel;
+    box.querySelector('.condition-hint').textContent=hint;
+  }
+  function addCondition(value={}){
+    const box=document.createElement('div');
+    const selectedType=types.includes(value.type)?value.type:'cpu_busy_gte';
+    box.className='pp-condition';
+    box.innerHTML=`
+      <div class="pp-row">
+        <div class="pp-field">
+          <label>Quando si verifica questa condizione</label>
+          <select class="ct">${types.map(type=>`<option value="${type}" ${type===selectedType?'selected':''}>${conditionTypes[type]}</option>`).join('')}</select>
+        </div>
+        <button class="pp-btn pp-danger remove-condition" type="button">Rimuovi condizione</button>
+      </div>
+      <div class="condition-hint pp-condition-hint"></div>
+      <div class="pp-row">
+        <div class="pp-field pattern-field">
+          <label class="pattern-label">Nome container</label>
+          <input class="pattern" value="${esc(value.container||value.process||'')}">
+        </div>
+        <div class="pp-field value-field">
+          <label class="value-label">Soglia</label>
+          <input class="value" type="number" min="0" step="any" value="${esc(value.value??1)}">
+        </div>
+        <div class="pp-field port-field">
+          <label>Porta</label>
+          <input class="port" type="number" min="1" max="65535" value="${esc(value.port||value.query?.port||'')}">
+        </div>
+        <div class="pp-field protocol-field">
+          <label>Protocollo query</label>
+          <select class="protocol">
+            <option value="steam_a2s" ${value.query?.protocol!=='minecraft_rcon'?'selected':''}>Steam A2S</option>
+            <option value="minecraft_rcon" ${value.query?.protocol==='minecraft_rcon'?'selected':''}>Minecraft RCON</option>
+          </select>
+        </div>
+        <div class="pp-field host-field">
+          <label>Indirizzo o nome host</label>
+          <input class="host" placeholder="Es. 192.168.1.50" value="${esc(value.query?.host||'')}">
+        </div>
+        <div class="pp-field password-field">
+          <label>Password RCON</label>
+          <input class="password" type="password" autocomplete="new-password" value="${esc(value.query?.password||'')}">
+        </div>
+      </div>`;
+
+    box.querySelector('.ct').addEventListener('change',()=>updateConditionFields(box));
+    box.querySelector('.protocol').addEventListener('change',()=>updateConditionFields(box));
+    box.querySelector('.remove-condition').addEventListener('click',()=>box.remove());
+    document.getElementById('pp-conditions').appendChild(box);
+    updateConditionFields(box);
+  }
+  function readConditions(){
+    return [...document.querySelectorAll('.pp-condition')].map(box=>{
+      const type=box.querySelector('.ct').value;
+      const pattern=box.querySelector('.pattern').value.trim();
+      const value=Number(box.querySelector('.value').value||0);
+      const port=Number(box.querySelector('.port').value||0);
+      if(type==='docker_running')return{type,container:pattern};
+      if(type==='docker_cpu_gte')return{type,container:pattern,value};
+      if(type==='process_running')return{type,process:pattern};
+      if(type==='process_cpu_gte')return{type,process:pattern,value};
+      if(type==='tcp_connections_gte')return{type,port,value};
+      if(type==='game_players_gte')return{type,value,query:{protocol:box.querySelector('.protocol').value,host:box.querySelector('.host').value.trim(),port,password:box.querySelector('.password').value}};
+      return{type,value};
+    });
+  }
+  function validateConditions(conditions){
+    for(const condition of conditions){
+      if((condition.type.startsWith('docker_')||condition.type.startsWith('process_'))&&!condition.container&&!condition.process){
+        return 'Inserisci il nome del container o del processo da controllare.';
+      }
+      if(condition.type==='tcp_connections_gte'&&(condition.port<1||condition.port>65535)){
+        return 'Inserisci una porta TCP compresa tra 1 e 65535.';
+      }
+      if(condition.type==='game_players_gte'){
+        if(!condition.query.host)return 'Inserisci l’indirizzo o il nome host del server di gioco.';
+        if(condition.query.port<1||condition.query.port>65535)return 'Inserisci una porta query compresa tra 1 e 65535.';
+        if(condition.query.protocol==='minecraft_rcon'&&!condition.query.password)return 'Inserisci la password RCON del server Minecraft.';
+      }
+    }
+    return '';
+  }
+  function saveRule(){
+    const name=document.getElementById('pp-rule-name').value.trim();
+    const conditions=readConditions();
+    if(!name||!conditions.length)return say('Inserisci un nome e almeno una condizione.',true);
+    const conditionError=validateConditions(conditions);
+    if(conditionError)return say(conditionError,true);
+    const id=document.getElementById('pp-rule-id').value||name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
+    const row={id,name,enabled:document.getElementById('pp-rule-enabled').checked,priority:Number(document.getElementById('pp-rule-priority').value||0),profile:document.getElementById('pp-rule-profile').value,hold_sec:Number(document.getElementById('pp-rule-hold').value||0),match:document.getElementById('pp-rule-match').value,conditions};
+    if(editingRule!==null){const i=data.config.rules.findIndex(rule=>rule.id===editingRule);if(i>=0)data.config.rules[i]=row;}
+    else data.config.rules.push(row);
+    persist('Regola salvata.');
+  }
   function editRule(id){const r=data.config.rules.find(x=>x.id===id);if(!r)return;editingRule=id;document.getElementById('pp-rule-id').value=id;document.getElementById('pp-rule-name').value=r.name;document.getElementById('pp-rule-priority').value=r.priority;document.getElementById('pp-rule-profile').value=r.profile;document.getElementById('pp-rule-hold').value=r.hold_sec;document.getElementById('pp-rule-match').value=r.match||'all';document.getElementById('pp-rule-enabled').checked=r.enabled;document.getElementById('pp-conditions').innerHTML='';r.conditions.forEach(addCondition);document.getElementById('pp-rule-title').textContent='Modifica regola'}
   function cancelRule(){editingRule=null;document.getElementById('pp-rule-id').value='';document.getElementById('pp-rule-name').value='';document.getElementById('pp-rule-priority').value=100;document.getElementById('pp-rule-hold').value=10;document.getElementById('pp-rule-match').value='all';document.getElementById('pp-rule-enabled').checked=true;document.getElementById('pp-conditions').innerHTML='';addCondition();document.getElementById('pp-rule-title').textContent='Aggiungi regola'}
   function deleteRule(id){if(!confirm('Eliminare la regola?'))return;data.config.rules=data.config.rules.filter(r=>r.id!==id);persist('Regola eliminata.')}
